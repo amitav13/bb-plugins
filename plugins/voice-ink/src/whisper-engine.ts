@@ -9,6 +9,7 @@ import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:chil
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
+import os from "node:os";
 import { join } from "node:path";
 import type { EngineConfig, EngineStatus, TranscriptionResult } from "../contract.js";
 
@@ -376,6 +377,13 @@ export class WhisperEngine {
     ) as ChildProcessWithoutNullStreams;
 
     this.child = child;
+    // Recognition is background work by nature: when the machine is busy, the
+    // agents and the bb server should get the cores first.
+    try {
+      if (child.pid !== undefined) os.setPriority(child.pid, 10);
+    } catch {
+      // Priorities are advisory; failing to lower one changes nothing else.
+    }
     this.lease = this.options.retainWorker();
     this.stdoutBuffer = "";
     this.stderrTail = [];

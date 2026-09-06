@@ -83,7 +83,7 @@ already loaded:
 
 | model | wait after "stop" | quality |
 |---|---|---|
-| `small` (default) | 4.7 s for a phrase, 8.7 s for a minute | usable, mangles rarer terms |
+| `small` (default) | 4.5 s for a phrase, 10.4 s for a minute | usable, mangles rarer terms |
 | `medium` | two to three times that | noticeably better |
 | `large-v3-turbo` | slower still | no better than `medium` at int8 on this CPU |
 
@@ -97,10 +97,10 @@ such limit.
 A minute of speech takes longer to recognize than bb allows for one attempt, so
 three things keep it from being lost:
 
-- **A long recording is split at pauses and recognized in parallel.** One
-  Whisper pass saturates about one and a half cores; three passes fill a
-  four-core machine. Measured: a minute in 8 s instead of 12.5 s, two and a half
-  minutes in 17.6 s instead of 32.9 s.
+- **A long recording is split at pauses and recognized in parallel** — but only
+  when there are cores to spare (see below). One Whisper pass saturates about
+  one and a half cores, so on a bigger machine three passes cut a two-minute
+  dictation roughly in half.
 - **Work outlives the attempt that started it.** The recognition is keyed by the
   audio, so bb's retry joins the job already running instead of starting over.
 - **A caller that runs out of time twice gets what has been recognized so far**,
@@ -117,13 +117,26 @@ A machine with an NVIDIA GPU is a different story: set **Precision** to
 | Spoken language | `auto`, `ru`, `en` — naming the language avoids misdetection on short phrases |
 | Vocabulary hints | names and terms fed to the model as context, one line |
 | Precision | `int8` (CPU), `int8_float32`, `float32` |
-| CPU threads / Batch size | leave alone unless the machine is bigger or busier; batching is off because it hands the model VAD-split chunks whose opening words the smaller models drop |
+| CPU cores recognition may use | the ceiling, default `2`; the plugin decides how to spend it (one pass with that many threads, or several parallel passes once there are at least four cores) |
+| Batch size | off by default: batching hands the model VAD-split chunks whose opening words the smaller models drop |
 | Show this plugin's own microphone button | a second, streaming button in the composer next to bb's own |
 | Python interpreter | absolute path when `faster-whisper` lives in a virtualenv |
 | Unload the model after N idle minutes | `0` keeps it loaded; unloading means the next phrase pays for the load again, which bb's own button has no time for |
 
 Changing a setting retires the resident worker; the next phrase runs on the new
 configuration.
+
+## Sharing the machine
+
+bb, the agents and everything else live on the same box, so recognition is
+capped and de-prioritized rather than allowed to take what it likes:
+
+- **CPU cores recognition may use** (default `2`) is a hard ceiling: threads per
+  pass times parallel passes never exceeds it, and the numeric libraries under
+  ONNX and NumPy are pinned to the same number before they load. Measured while
+  transcribing: 190% of one core on a four-core machine.
+- The worker runs at a **lowered priority** (nice 10), so when the machine is
+  busy the agents and the bb server get the cores first.
 
 ## How it works
 

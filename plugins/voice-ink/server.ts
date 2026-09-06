@@ -41,6 +41,22 @@ const MODEL_REPOS: Record<string, string> = {
   "large-v3-turbo": "deepdml/faster-whisper-large-v3-turbo-ct2",
 };
 
+/**
+ * Spend a core budget on recognition passes; threads per pass times passes
+ * never exceeds it.
+ *
+ * Splitting a long recording pays off only once there are cores to spare.
+ * Measured inside two cores: as two single-threaded passes a minute takes
+ * 10.2s and a short phrase 6.7s, while one two-threaded pass takes 10.6s and
+ * 4.7s. Short phrases are what dictation is mostly made of, so below four
+ * cores the budget goes into one pass.
+ */
+function splitCores(cores: number): { threads: number; parallel: number } {
+  const budget = Math.max(1, cores);
+  const parallel = Math.min(3, Math.max(1, Math.floor(budget / 2)));
+  return { threads: Math.max(1, Math.floor(budget / parallel)), parallel };
+}
+
 function parsePositiveInt(value: string, fallback: number): number {
   const parsed = Number.parseInt(value.trim(), 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
@@ -82,15 +98,12 @@ export default async function plugin(bb: BbPluginApi) {
       options: ["int8", "int8_float32", "float32"],
       default: "int8",
     },
-    // Two threads per pass, three passes: one Whisper pass saturates about one
-    // and a half cores, so three of them fill a four-core box far better than
-    // one pass with four threads. Measured on a minute of speech: 8s instead
-    // of 12.5s — the difference between fitting bb's attempt and not.
-    threads: { type: "string", label: "CPU threads per pass", default: "2" },
-    parallel: {
+    // Whisper shares this machine with bb, the agents and everything else, so
+    // the user caps it in the unit they actually care about: cores.
+    cpuCores: {
       type: "string",
-      label: "Recognize a long recording in N pieces at once",
-      default: "3",
+      label: "CPU cores recognition may use",
+      default: "2",
     },
     // Batching shaves about a tenth off long audio but hands the model
     // VAD-split chunks whose opening words the smaller models drop, so it is
@@ -151,7 +164,7 @@ export default async function plugin(bb: BbPluginApi) {
     return {
       model: MODEL_REPOS[model] ?? model,
       computeType: values.computeType,
-      threads: parsePositiveInt(values.threads, 4),
+      ...splitCores(parsePositiveInt(values.cpuCores, 2)),
       batchSize: parsePositiveInt(values.batchSize, 4),
       language: values.language === "auto" ? null : values.language,
       vocabulary: values.vocabulary.trim() === "" ? null : values.vocabulary.trim(),
@@ -160,7 +173,6 @@ export default async function plugin(bb: BbPluginApi) {
       // transcription attempt, so by default it is never unloaded: the first
       // phrase after a quiet hour must not be the one that fails.
       idleUnloadMs: parseNonNegativeInt(values.idleMinutes, 0) * 60_000,
-      parallel: parsePositiveInt(values.parallel, 3),
       punctuate: values.punctuation,
       paragraphPauseSec: parsePositiveFloat(values.paragraphPause, 1.2),
       polish: {

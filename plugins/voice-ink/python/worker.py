@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import re
 import sys
 import time
@@ -214,6 +215,13 @@ def main() -> int:
     parser.add_argument("--parallel", type=int, default=3)
     args = parser.parse_args()
 
+    # Whisper is a guest on this machine: bb, the agents and everything else
+    # share the same cores. CTranslate2 sizes its own pool from --threads, but
+    # the numeric libraries under ONNX and NumPy read the environment, so the
+    # ceiling is set here, before anything imports them.
+    for variable in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS"):
+        os.environ[variable] = str(max(1, args.threads))
+
     try:
         from faster_whisper import BatchedInferencePipeline, WhisperModel
         from faster_whisper.audio import decode_audio
@@ -251,6 +259,7 @@ def main() -> int:
         "event": "ready",
         "model": args.model,
         "punctuation": punctuator.model is not None,
+        "cores": max(1, args.threads) * max(1, args.parallel),
         "computeType": args.compute_type,
         "device": args.device,
     })
@@ -310,15 +319,43 @@ def main() -> int:
             chunks = split_at_pauses(audio, 16000, parts) if parts > 1 else [Chunk(audio, 0.0)]
 
             if len(chunks) > 1:
-                def run(chunk):
+                # Each pass fills its own slot as it goes, so the partial text
+                # published below stays in the order it was spoken even though
+                # the pieces are recognized at the same time.
+                collected = [[] for _ in chunks]
+
+                def run(index):
+                    chunk = chunks[index]
                     produced, _ = model.transcribe(chunk.audio, **options)
-                    return [
-                        Shifted(s.start + chunk.offset, s.end + chunk.offset, s.text)
-                        for s in produced
-                    ]
+                    for segment in produced:
+                        collected[index].append(
+                            Shifted(
+                                segment.start + chunk.offset,
+                                segment.end + chunk.offset,
+                                segment.text,
+                            )
+                        )
 
                 with ThreadPoolExecutor(max_workers=len(chunks)) as pool:
-                    raw = [s for group in pool.map(run, chunks) for s in group]
+                    running = [pool.submit(run, index) for index in range(len(chunks))]
+                    last_publish = time.monotonic()
+                    while not all(task.done() for task in running):
+                        time.sleep(0.2)
+                        if time.monotonic() - last_publish < PARTIAL_INTERVAL_SEC:
+                            continue
+                        last_publish = time.monotonic()
+                        so_far = [s for group in collected for s in group]
+                        if so_far:
+                            emit({
+                                "id": request_id,
+                                "event": "partial",
+                                "text": " ".join(
+                                    part.text.strip() for part in deduplicate(so_far)
+                                ),
+                            })
+                    for task in running:
+                        task.result()  # surface a failed pass as this request's error
+                raw = [s for group in collected for s in group]
             elif batched is not None and audio_sec >= BATCH_MIN_AUDIO_SEC:
                 raw, _ = batched.transcribe(audio, batch_size=args.batch_size, **options)
             else:

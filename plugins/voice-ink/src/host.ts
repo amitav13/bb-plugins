@@ -48,7 +48,7 @@ const DEFAULT_CONFIG: EngineConfig = {
   vocabulary: null,
   pythonPath: null,
   idleUnloadMs: 0,
-  parallel: 3,
+  parallel: 1,
   punctuate: true,
   paragraphPauseSec: 1.2,
   polish: {

@@ -10,6 +10,7 @@ export const engineConfigSchema = z
     model: z.string().min(1),
     /** CTranslate2 quantization; int8 is the only one that keeps CPU usable. */
     computeType: z.string().min(1),
+    /** Compute threads per recognition pass. */
     threads: z.number().int().positive().max(64),
     batchSize: z.number().int().positive().max(32),
     /** Spoken language, or null to let the model detect it. */
