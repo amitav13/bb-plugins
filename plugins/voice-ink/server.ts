@@ -82,7 +82,16 @@ export default async function plugin(bb: BbPluginApi) {
       options: ["int8", "int8_float32", "float32"],
       default: "int8",
     },
-    threads: { type: "string", label: "CPU threads", default: "4" },
+    // Two threads per pass, three passes: one Whisper pass saturates about one
+    // and a half cores, so three of them fill a four-core box far better than
+    // one pass with four threads. Measured on a minute of speech: 8s instead
+    // of 12.5s — the difference between fitting bb's attempt and not.
+    threads: { type: "string", label: "CPU threads per pass", default: "2" },
+    parallel: {
+      type: "string",
+      label: "Recognize a long recording in N pieces at once",
+      default: "3",
+    },
     // Batching shaves about a tenth off long audio but hands the model
     // VAD-split chunks whose opening words the smaller models drop, so it is
     // off unless someone deliberately turns it on.
@@ -151,6 +160,7 @@ export default async function plugin(bb: BbPluginApi) {
       // transcription attempt, so by default it is never unloaded: the first
       // phrase after a quiet hour must not be the one that fails.
       idleUnloadMs: parseNonNegativeInt(values.idleMinutes, 0) * 60_000,
+      parallel: parsePositiveInt(values.parallel, 3),
       punctuate: values.punctuation,
       paragraphPauseSec: parsePositiveFloat(values.paragraphPause, 1.2),
       polish: {
@@ -232,6 +242,7 @@ export default async function plugin(bb: BbPluginApi) {
     "  bb voice-ink status [--json]        Show the recognition engine's state",
     "  bb voice-ink warmup [--json]        Load the model now so the first phrase is fast",
     "  bb voice-ink transcribe <file>      Transcribe an audio file with the local model",
+    "  bb voice-ink last [--json]          Show the last transcript, even if the caller gave up",
     "  bb voice-ink enable                 Print how to make this bb's transcription service",
   ].join("\n");
 
@@ -245,6 +256,11 @@ export default async function plugin(bb: BbPluginApi) {
         name: "transcribe",
         summary: "Transcribe an audio file",
         usage: "bb voice-ink transcribe <file> [--json]",
+      },
+      {
+        name: "last",
+        summary: "Show the last transcript this machine produced",
+        usage: "bb voice-ink last [--json]",
       },
       {
         name: "enable",
@@ -301,6 +317,15 @@ export default async function plugin(bb: BbPluginApi) {
             result,
             `${result.text}\n\n(${result.audioSec}s of audio in ${result.elapsedSec}s, ${wall}s wall)`,
           );
+        }
+
+        case "last": {
+          const id = await hostId();
+          const { text } = await host.call("voice.last", {}, { hostId: id });
+          if (text === null) {
+            return { exitCode: 1, stderr: "Nothing has been transcribed yet." };
+          }
+          return reply({ text }, text);
         }
 
         case "enable":

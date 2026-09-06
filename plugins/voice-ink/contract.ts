@@ -20,6 +20,8 @@ export const engineConfigSchema = z
     pythonPath: z.string().nullable(),
     /** Retire the model after this long without a request; 0 keeps it loaded. */
     idleUnloadMs: z.number().int().nonnegative(),
+    /** How many pieces of a long recording are recognized side by side. */
+    parallel: z.number().int().positive().max(8),
     /** Restore punctuation, sentence boundaries and capitalization locally. */
     punctuate: z.boolean(),
     /** A pause at least this long starts a new paragraph. */
@@ -80,6 +82,10 @@ export const voiceHostContract = defineRpcContract({
   "voice.status": {
     input: z.object({ warmUp: z.boolean() }).strict(),
     output: engineStatusSchema,
+  },
+  "voice.last": {
+    input: z.object({}).strict(),
+    output: z.object({ text: z.string().nullable() }).strict(),
   },
   "voice.transcribeSegment": {
     input: z

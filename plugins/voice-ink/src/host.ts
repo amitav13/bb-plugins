@@ -42,12 +42,13 @@ const TIMEOUT_GRACE_MS = 500;
 const DEFAULT_CONFIG: EngineConfig = {
   model: "small",
   computeType: "int8",
-  threads: 4,
+  threads: 2,
   batchSize: 1,
   language: null,
   vocabulary: null,
   pythonPath: null,
   idleUnloadMs: 0,
+  parallel: 3,
   punctuate: true,
   paragraphPauseSec: 1.2,
   polish: {
@@ -206,6 +207,10 @@ export default experimental_defineHostEntry({
         prompt: input.prompt,
         timeoutMs: Math.max(1_000, input.timeoutMs - TIMEOUT_GRACE_MS),
       });
+      console.log(
+        `[voice-ink] transcribe ${result.ok ? "ok" : result.code}: ` +
+          `${result.ok ? `${result.audioSec}s audio in ${result.elapsedSec}s` : result.message}`,
+      );
       if (!result.ok) return toVoiceOutput(input.model, result);
       const config = active.currentConfig();
       const text =
@@ -227,6 +232,11 @@ export default experimental_defineHostEntry({
     "voice.status": async ({ warmUp }, context): Promise<EngineStatus> => {
       const active = await engineFor(context as HostContext);
       return warmUp ? active.warmUp() : active.status();
+    },
+
+    "voice.last": async (_input, context): Promise<{ text: string | null }> => {
+      const active = await engineFor(context as HostContext);
+      return { text: active.lastTranscript() };
     },
 
     "voice.transcribeSegment": async (input, context): Promise<TranscriptionResult> => {

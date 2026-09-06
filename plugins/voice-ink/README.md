@@ -83,13 +83,28 @@ already loaded:
 
 | model | wait after "stop" | quality |
 |---|---|---|
-| `small` (default) | 3 s for a short phrase, ~6 s for fifteen seconds | usable, mangles rarer terms |
-| `medium` | 7–15 s depending on how busy the machine is | noticeably better |
-| `large-v3-turbo` | ~11 s | no better than `medium` at int8 on this CPU |
+| `small` (default) | 4.7 s for a phrase, 8.7 s for a minute | usable, mangles rarer terms |
+| `medium` | two to three times that | noticeably better |
+| `large-v3-turbo` | slower still | no better than `medium` at int8 on this CPU |
 
-bb's own microphone button gives a plugin **10 seconds per attempt**, which
-only `small` clears with room to spare on this hardware. `medium` is worth it
-only through the plugin's own button, which has no such limit.
+bb's own microphone button gives a plugin **10 seconds per attempt** and retries
+once, so on this hardware only `small` fits a minute of speech. `medium` is
+worth it for short phrases, or through the plugin's own button, which has no
+such limit.
+
+## Long dictations
+
+A minute of speech takes longer to recognize than bb allows for one attempt, so
+three things keep it from being lost:
+
+- **A long recording is split at pauses and recognized in parallel.** One
+  Whisper pass saturates about one and a half cores; three passes fill a
+  four-core machine. Measured: a minute in 8 s instead of 12.5 s, two and a half
+  minutes in 17.6 s instead of 32.9 s.
+- **Work outlives the attempt that started it.** The recognition is keyed by the
+  audio, so bb's retry joins the job already running instead of starting over.
+- **A caller that runs out of time twice gets what has been recognized so far**,
+  and the full text stays available: `bb voice-ink last`.
 
 A machine with an NVIDIA GPU is a different story: set **Precision** to
 `float16` and the same models run several times faster.
