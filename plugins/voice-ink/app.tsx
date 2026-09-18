@@ -12,6 +12,7 @@ import {
   useSettings,
 } from "@get-bb/plugin-sdk/app";
 import { toast } from "sonner";
+import { HistoryPanel } from "@/components/HistoryPanel";
 import { Icon } from "@/components/ui/icon";
 import { useDictation } from "@/hooks/useDictation";
 import { cn } from "@/lib/utils";
@@ -112,5 +113,16 @@ export default definePluginApp((app) => {
   app.composer.customize({
     id: "voice-ink",
     actions: [{ id: "dictate", component: VoiceButton }],
+  });
+
+  // Dictations outlive the composer they were meant for: bb stops waiting
+  // after twenty seconds, recognition does not. This is where the whole text
+  // and the recording it came from can be found afterwards.
+  app.slots.navPanel({
+    id: "voice-ink",
+    title: "Voice Ink",
+    icon: "Mic",
+    path: "history",
+    component: HistoryPanel,
   });
 });

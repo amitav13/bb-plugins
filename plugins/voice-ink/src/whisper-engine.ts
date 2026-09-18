@@ -186,6 +186,12 @@ export class WhisperEngine {
     language: string | null;
     prompt: string | null;
     timeoutMs: number;
+    /**
+     * Called once with the finished result, however long that takes and
+     * whoever is still waiting — this is what lets a dictation bb gave up on
+     * still reach the history.
+     */
+    onSettled?: (result: TranscriptionResult) => void;
   }): Promise<TranscriptionResult> {
     const config = this.config;
     if (config === null) {
@@ -217,9 +223,13 @@ export class WhisperEngine {
         (result) => {
           created.finishedAt = Date.now();
           if (result.ok && result.text.trim() !== "") this.lastText = result.text;
+          args.onSettled?.(result);
         },
-        () => {
+        (error: unknown) => {
           created.finishedAt = Date.now();
+          args.onSettled?.(
+            failure("service_unavailable", error instanceof Error ? error.message : String(error)),
+          );
         },
       );
       job = created;
@@ -238,7 +248,13 @@ export class WhisperEngine {
           // because the last sentence was still running.
           const partial = running.partial;
           if (waitedMs > 1_000 && partial !== null && partial.trim() !== "") {
-            resolve({ ok: true, text: partial.trim(), audioSec: 0, elapsedSec: 0 });
+            resolve({
+              ok: true,
+              text: partial.trim(),
+              audioSec: 0,
+              elapsedSec: 0,
+              partial: true,
+            });
             return;
           }
           resolve(

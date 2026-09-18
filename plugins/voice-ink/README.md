@@ -13,6 +13,9 @@ running next to bb.
 
 - **bb's own microphone button**, working again — every client has it,
   including the phone app. Point `BB_TRANSCRIPTION` at this plugin (below).
+- **A History panel**, in bb's sidebar under the microphone: every dictation
+  with its recording and its full text, searchable. It is where a long
+  dictation ends up in one piece (below).
 - **`bb voice-ink transcribe <file>`** for anything already recorded.
 - **An optional second button in the composer** (setting: *Show this plugin's
   own microphone button*, off by default). It cuts speech at pauses and
@@ -104,10 +107,38 @@ three things keep it from being lost:
 - **Work outlives the attempt that started it.** The recognition is keyed by the
   audio, so bb's retry joins the job already running instead of starting over.
 - **A caller that runs out of time twice gets what has been recognized so far**,
-  and the full text stays available: `bb voice-ink last`.
+  marked in the composer as partial, while recognition carries on in the
+  background.
+- **The whole transcript lands in History**, along with the recording — so the
+  part bb never waited for is one panel away, not gone.
+
+Measured on this machine (four cores, no GPU, two-core ceiling, `small`): a
+2:55 recording reaches the composer as its first 664 characters after bb's
+19.4 seconds, and the panel holds all 1993 characters 33 seconds after the
+recording arrived.
 
 A machine with an NVIDIA GPU is a different story: set **Precision** to
 `float16` and the same models run several times faster.
+
+## History
+
+The panel lists dictations newest first: when, how long, the transcript. Open
+one for the full text, a player for the recording, copy and download.
+
+- Entries whose text outran bb's wait are labelled **only part reached the
+  composer** — that label is the whole reason the panel exists.
+- What is still being recognized shows as **transcribing** and fills itself in.
+- From the terminal: `bb voice-ink history`, `bb voice-ink show <id>`,
+  `bb voice-ink forget <id>|--all`. `bb voice-ink last` prints the most recent
+  transcript.
+- Only bb's own microphone button is recorded. The plugin's streaming button
+  sends speech in pieces as you talk, and a list of half-sentences would be
+  worse than no list.
+
+Audio and text live in `<host data dir>/history/`, and nothing leaves the
+machine. Retention is two settings — *Keep at most N dictations* (200) and
+*Delete dictations older than N days* (30) — and *Keep a history of dictations*
+turns the whole thing off, which also stops the recordings from being written.
 
 ## Settings
 
@@ -122,6 +153,9 @@ A machine with an NVIDIA GPU is a different story: set **Precision** to
 | Show this plugin's own microphone button | a second, streaming button in the composer next to bb's own |
 | Python interpreter | absolute path when `faster-whisper` lives in a virtualenv |
 | Unload the model after N idle minutes | `0` keeps it loaded; unloading means the next phrase pays for the load again, which bb's own button has no time for |
+| Keep a history of dictations | records audio and transcript for the History panel; off means neither is written |
+| Keep at most N dictations | `0` lifts the cap |
+| Delete dictations older than N days | `0` keeps them for good |
 
 Changing a setting retires the resident worker; the next phrase runs on the new
 configuration.
@@ -143,8 +177,10 @@ capped and de-prioritized rather than allowed to take what it likes:
 ```
 app.tsx          microphone button in the composer
 lib/dictation.ts capture at 16 kHz, cut at pauses, encode WAV
-server.ts        AI-service registration, settings, CLI, RPC
+server.ts        AI-service registration, settings, CLI, RPC, audio route
+components/      the History panel and its player
 src/host.ts      the bb.host entry, running on the machine bb runs on
+src/history.ts   recordings and transcripts on disk, and their retention
 python/worker.py resident faster-whisper process, model kept in memory
 ```
 

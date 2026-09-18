@@ -12,6 +12,7 @@ import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import {
+  HISTORY_AUDIO_ROUTE,
   rpcContract,
   voiceHostContract,
   type EngineConfig,
@@ -156,6 +157,24 @@ export default async function plugin(bb: BbPluginApi) {
       label: "Show this plugin's own microphone button",
       default: false,
     },
+    // bb waits ten seconds per attempt and tries twice; a few minutes of
+    // speech take longer, so what it does not wait for has to be kept
+    // somewhere the user can still reach it.
+    history: {
+      type: "boolean",
+      label: "Keep a history of dictations (audio and transcript)",
+      default: true,
+    },
+    historyLimit: {
+      type: "string",
+      label: "Keep at most N dictations (0 = no limit)",
+      default: "200",
+    },
+    historyDays: {
+      type: "string",
+      label: "Delete dictations older than N days (0 = keep them)",
+      default: "30",
+    },
   });
 
   async function currentConfig(): Promise<EngineConfig> {
@@ -173,6 +192,11 @@ export default async function plugin(bb: BbPluginApi) {
       // transcription attempt, so by default it is never unloaded: the first
       // phrase after a quiet hour must not be the one that fails.
       idleUnloadMs: parseNonNegativeInt(values.idleMinutes, 0) * 60_000,
+      history: {
+        enabled: values.history,
+        maxEntries: parseNonNegativeInt(values.historyLimit, 200),
+        maxAgeDays: parseNonNegativeInt(values.historyDays, 30),
+      },
       punctuate: values.punctuation,
       paragraphPauseSec: parsePositiveFloat(values.paragraphPause, 1.2),
       polish: {
@@ -222,6 +246,47 @@ export default async function plugin(bb: BbPluginApi) {
       const id = await hostId();
       return host.call("voice.transcribeSegment", input, { hostId: id });
     },
+    history_list: async (input) => {
+      const id = await hostId();
+      return host.call("voice.history.list", input, { hostId: id });
+    },
+    history_delete: async (input) => {
+      const id = await hostId();
+      return host.call("voice.history.delete", input, { hostId: id });
+    },
+    history_clear: async () => {
+      const id = await hostId();
+      return host.call("voice.history.clear", {}, { hostId: id });
+    },
+  });
+
+  // The panel plays audio through an <audio> element, which needs bytes at a
+  // URL rather than a base64 string in an RPC reply.
+  bb.http.route("GET", HISTORY_AUDIO_ROUTE, async (context) => {
+    const id = context.req.query("id");
+    if (typeof id !== "string" || id.trim() === "") {
+      return new Response(JSON.stringify({ error: "invalid_params" }), {
+        status: 400,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    const found = await host.call("voice.history.audio", { id }, { hostId: await hostId() });
+    if (found === null) {
+      return new Response(JSON.stringify({ error: "not_found" }), {
+        status: 404,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    const bytes = Buffer.from(found.audioBase64, "base64");
+    return new Response(bytes, {
+      status: 200,
+      headers: {
+        "content-type": found.mimeType,
+        "content-length": String(bytes.byteLength),
+        // Recordings never change once written, so the panel may keep them.
+        "cache-control": "private, max-age=86400, immutable",
+      },
+    });
   });
 
   // Settings are applied to the host, not read there: a model change retires the
@@ -255,6 +320,9 @@ export default async function plugin(bb: BbPluginApi) {
     "  bb voice-ink warmup [--json]        Load the model now so the first phrase is fast",
     "  bb voice-ink transcribe <file>      Transcribe an audio file with the local model",
     "  bb voice-ink last [--json]          Show the last transcript, even if the caller gave up",
+    "  bb voice-ink history [--json] [-n N] List past dictations",
+    "  bb voice-ink show <id> [--json]     Show one dictation in full",
+    "  bb voice-ink forget <id>|--all      Delete a dictation, or all of them",
     "  bb voice-ink enable                 Print how to make this bb's transcription service",
   ].join("\n");
 
@@ -273,6 +341,21 @@ export default async function plugin(bb: BbPluginApi) {
         name: "last",
         summary: "Show the last transcript this machine produced",
         usage: "bb voice-ink last [--json]",
+      },
+      {
+        name: "history",
+        summary: "List past dictations",
+        usage: "bb voice-ink history [--json] [-n N]",
+      },
+      {
+        name: "show",
+        summary: "Show one dictation in full",
+        usage: "bb voice-ink show <id> [--json]",
+      },
+      {
+        name: "forget",
+        summary: "Delete a dictation, or all of them",
+        usage: "bb voice-ink forget <id>|--all",
       },
       {
         name: "enable",
@@ -338,6 +421,76 @@ export default async function plugin(bb: BbPluginApi) {
             return { exitCode: 1, stderr: "Nothing has been transcribed yet." };
           }
           return reply({ text }, text);
+        }
+
+        case "history": {
+          const index = args.findIndex((arg) => arg === "-n" || arg === "--limit");
+          const limit = index === -1 ? 20 : parsePositiveInt(args[index + 1] ?? "", 20);
+          const queryArgs = args.filter(
+            (arg, position) => position !== index && position !== index + 1,
+          );
+          const id = await hostId();
+          const listed = await host.call(
+            "voice.history.list",
+            { query: queryArgs.join(" "), limit: Math.min(limit, 200), offset: 0 },
+            { hostId: id },
+          );
+          if (listed.entries.length === 0) {
+            return reply(listed, "No dictations recorded yet.");
+          }
+          const lines = listed.entries.map((entry) => {
+            const when = new Date(entry.createdAt).toLocaleString();
+            const seconds = entry.durationSec === null ? "" : ` ${entry.durationSec.toFixed(0)}s`;
+            const cut =
+              entry.deliveredChars !== null && entry.deliveredChars < entry.text.length
+                ? " [partially delivered]"
+                : "";
+            const preview = entry.text.replace(/\s+/g, " ").slice(0, 80);
+            return `${entry.id.slice(0, 8)}  ${when}${seconds}${cut}  ${preview}`;
+          });
+          return reply(listed, [...lines, "", `${listed.total} in total`].join("\n"));
+        }
+
+        case "show": {
+          const wanted = args[0];
+          if (wanted === undefined) break;
+          const id = await hostId();
+          // Ids are long; the list prints a short prefix, so accept one here.
+          const listed = await host.call(
+            "voice.history.list",
+            { query: "", limit: 200, offset: 0 },
+            { hostId: id },
+          );
+          const entry = listed.entries.find((candidate) => candidate.id.startsWith(wanted));
+          if (entry === undefined) {
+            return { exitCode: 1, stderr: `No dictation starts with "${wanted}".` };
+          }
+          return reply(entry, entry.text);
+        }
+
+        case "forget": {
+          const id = await hostId();
+          if (args.includes("--all")) {
+            const { removed } = await host.call("voice.history.clear", {}, { hostId: id });
+            return reply({ removed }, `Deleted ${removed} dictation(s).`);
+          }
+          const wanted = args[0];
+          if (wanted === undefined) break;
+          const listed = await host.call(
+            "voice.history.list",
+            { query: "", limit: 200, offset: 0 },
+            { hostId: id },
+          );
+          const entry = listed.entries.find((candidate) => candidate.id.startsWith(wanted));
+          if (entry === undefined) {
+            return { exitCode: 1, stderr: `No dictation starts with "${wanted}".` };
+          }
+          const { removed } = await host.call(
+            "voice.history.delete",
+            { id: entry.id },
+            { hostId: id },
+          );
+          return reply({ removed }, removed ? "Deleted." : "Nothing to delete.");
         }
 
         case "enable":
