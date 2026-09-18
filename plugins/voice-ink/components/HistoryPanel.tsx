@@ -6,7 +6,7 @@
 // text outran the composer is called out, and why the list keeps refreshing
 // while something is still being recognized.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useRpc } from "@get-bb/plugin-sdk/app";
+import { useRpc, type PluginNavPanelProps } from "@get-bb/plugin-sdk/app";
 import { toast } from "sonner";
 
 import { AudioPlayer, formatClock } from "@/components/AudioPlayer";
@@ -74,7 +74,7 @@ function StatusBadge({ entry }: { entry: HistoryEntry }) {
   return null;
 }
 
-export function HistoryPanel() {
+export function HistoryPanel({ subPath }: PluginNavPanelProps) {
   const rpc = useRpc<typeof rpcContract>();
   const [query, setQuery] = useState("");
   const [search, setSearch] = useState("");
@@ -83,11 +83,17 @@ export function HistoryPanel() {
   const [limit, setLimit] = useState(PAGE_SIZE);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [openId, setOpenId] = useState<string | null>(null);
+  // Arriving from the footer disclosure means one entry was asked for by id;
+  // it opens on load rather than making the user find it again.
+  const [openId, setOpenId] = useState<string | null>(subPath === "" ? null : subPath);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   // Refreshes must not fight the user: a reply that started before the latest
   // keystroke is dropped rather than painted over the newer one.
   const requestSeq = useRef(0);
+
+  useEffect(() => {
+    if (subPath !== "") setOpenId(subPath);
+  }, [subPath]);
 
   // Typing filters the list, but not on every keystroke.
   useEffect(() => {
@@ -220,6 +226,7 @@ export function HistoryPanel() {
                     aria-expanded={open}
                     className="flex w-full cursor-pointer items-start gap-3 px-3 py-2.5 text-left"
                     onClick={() => setOpenId(open ? null : entry.id)}
+                    id={`entry-${entry.id}`}
                     type="button"
                   >
                     <div className="min-w-0 grow">

@@ -13,9 +13,9 @@ running next to bb.
 
 - **bb's own microphone button**, working again — every client has it,
   including the phone app. Point `BB_TRANSCRIPTION` at this plugin (below).
-- **A History panel**, in bb's sidebar under the microphone: every dictation
-  with its recording and its full text, searchable. It is where a long
-  dictation ends up in one piece (below).
+- **A History panel**, opened by the microphone in the sidebar footer: every
+  dictation with its recording and its full text, searchable. It is where a
+  long dictation ends up in one piece (below).
 - **`bb voice-ink transcribe <file>`** for anything already recorded.
 - **An optional second button in the composer** (setting: *Show this plugin's
   own microphone button*, off by default). It cuts speech at pauses and
@@ -122,6 +122,11 @@ A machine with an NVIDIA GPU is a different story: set **Precision** to
 
 ## History
 
+The microphone in the sidebar footer — next to settings and the theme switch —
+drops down the last six dictations, marking what is still being recognized and
+what only partly reached the composer. "Open History" (or the sidebar row)
+opens the full panel.
+
 The panel lists dictations newest first: when, how long, the transcript. Open
 one for the full text, a player for the recording, copy and download.
 
@@ -178,7 +183,7 @@ capped and de-prioritized rather than allowed to take what it likes:
 app.tsx          microphone button in the composer
 lib/dictation.ts capture at 16 kHz, cut at pauses, encode WAV
 server.ts        AI-service registration, settings, CLI, RPC, audio route
-components/      the History panel and its player
+components/      the History panel, its player, and the sidebar-footer drop-down
 src/host.ts      the bb.host entry, running on the machine bb runs on
 src/history.ts   recordings and transcripts on disk, and their retention
 python/worker.py resident faster-whisper process, model kept in memory

@@ -12,10 +12,12 @@ import {
   useSettings,
 } from "@get-bb/plugin-sdk/app";
 import { toast } from "sonner";
+import { HistoryDisclosure } from "@/components/HistoryDisclosure";
 import { HistoryPanel } from "@/components/HistoryPanel";
 import { Icon } from "@/components/ui/icon";
 import { useDictation } from "@/hooks/useDictation";
 import { cn } from "@/lib/utils";
+import { PANEL_PATH } from "./contract";
 import type { rpcContract } from "./server";
 
 function VoiceButton() {
@@ -122,7 +124,19 @@ export default definePluginApp((app) => {
     id: "voice-ink",
     title: "Voice Ink",
     icon: "Mic",
-    path: "history",
+    path: PANEL_PATH,
     component: HistoryPanel,
+  });
+
+  // The microphone in the sidebar footer, next to settings and the theme
+  // switch: the sidebar row above can be folded away under "More", and the
+  // question this answers ("did all of it get through?") comes up right after
+  // speaking, not when browsing panels.
+  app.experimental_sidebarFooter.register({
+    kind: "disclosure",
+    id: "history",
+    label: "Voice Ink history",
+    icon: "Mic",
+    component: HistoryDisclosure,
   });
 });

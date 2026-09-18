@@ -266,7 +266,12 @@ export default experimental_defineHostEntry({
           `${result.ok ? `${result.audioSec}s audio in ${result.elapsedSec}s` : result.message}`,
       );
       if (!result.ok) {
-        await archive.fail(entryId, result.message).catch(() => {});
+        // A timeout is bb giving up, not recognition failing: the job runs on
+        // and `onSettled` above files its result. Marking the entry failed here
+        // would show "failed" in the panel for work that is still going.
+        if (result.code !== "timeout") {
+          await archive.fail(entryId, result.message).catch(() => {});
+        }
         return toVoiceOutput(input.model, result);
       }
       const config = active.currentConfig();

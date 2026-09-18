@@ -20,6 +20,13 @@ interface IndexFile {
 }
 
 /**
+ * A recognition that has been "running" for longer than this is not running:
+ * the worker died with it. Longer than the engine's own hard limit, so honest
+ * long work is never mislabelled.
+ */
+const ABANDONED_AFTER_MS = 20 * 60_000;
+
+/**
  * A retry from bb arrives with the same audio as the attempt before it, so
  * entries are keyed by an audio digest for this long: within the window the
  * second attempt updates the first attempt's entry instead of adding a twin.
@@ -235,7 +242,19 @@ export class TranscriptHistory {
     try {
       const raw = await readFile(join(this.dir, "index.json"), "utf8");
       const parsed = JSON.parse(raw) as IndexFile;
-      this.entries = Array.isArray(parsed.entries) ? parsed.entries : [];
+      this.entries = Array.isArray(parsed.entries)
+        ? parsed.entries.map((entry) =>
+            // Nothing survives a killed worker mid-recognition, so an entry
+            // that outlived one says so instead of spinning for ever.
+            entry.status === "running" && Date.now() - entry.createdAt > ABANDONED_AFTER_MS
+              ? {
+                  ...entry,
+                  status: "failed" as const,
+                  error: "recognition was interrupted; the recording is still here",
+                }
+              : entry,
+          )
+        : [];
     } catch {
       // A missing or unreadable index is an empty history, not an error: the
       // dictation that is running right now matters more than what was lost.
