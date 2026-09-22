@@ -13,6 +13,9 @@ running next to bb.
 
 - **bb's own microphone button**, working again — every client has it,
   including the phone app. Point `BB_TRANSCRIPTION` at this plugin (below).
+- **A History panel**, opened by the microphone in the sidebar footer: every
+  dictation with its recording and its full text, searchable. It is where a
+  long dictation ends up in one piece (below).
 - **`bb voice-ink transcribe <file>`** for anything already recorded.
 - **An optional second button in the composer** (setting: *Show this plugin's
   own microphone button*, off by default). It cuts speech at pauses and
@@ -83,16 +86,64 @@ already loaded:
 
 | model | wait after "stop" | quality |
 |---|---|---|
-| `small` (default) | 3 s for a short phrase, ~6 s for fifteen seconds | usable, mangles rarer terms |
-| `medium` | 7–15 s depending on how busy the machine is | noticeably better |
-| `large-v3-turbo` | ~11 s | no better than `medium` at int8 on this CPU |
+| `small` (default) | 4.5 s for a phrase, 10.4 s for a minute | usable, mangles rarer terms |
+| `medium` | two to three times that | noticeably better |
+| `large-v3-turbo` | slower still | no better than `medium` at int8 on this CPU |
 
-bb's own microphone button gives a plugin **10 seconds per attempt**, which
-only `small` clears with room to spare on this hardware. `medium` is worth it
-only through the plugin's own button, which has no such limit.
+bb's own microphone button gives a plugin **10 seconds per attempt** and retries
+once, so on this hardware only `small` fits a minute of speech. `medium` is
+worth it for short phrases, or through the plugin's own button, which has no
+such limit.
+
+## Long dictations
+
+A minute of speech takes longer to recognize than bb allows for one attempt, so
+three things keep it from being lost:
+
+- **A long recording is split at pauses and recognized in parallel** — but only
+  when there are cores to spare (see below). One Whisper pass saturates about
+  one and a half cores, so on a bigger machine three passes cut a two-minute
+  dictation roughly in half.
+- **Work outlives the attempt that started it.** The recognition is keyed by the
+  audio, so bb's retry joins the job already running instead of starting over.
+- **A caller that runs out of time twice gets what has been recognized so far**,
+  marked in the composer as partial, while recognition carries on in the
+  background.
+- **The whole transcript lands in History**, along with the recording — so the
+  part bb never waited for is one panel away, not gone.
+
+Measured on this machine (four cores, no GPU, two-core ceiling, `small`): a
+2:55 recording reaches the composer as its first 664 characters after bb's
+19.4 seconds, and the panel holds all 1993 characters 33 seconds after the
+recording arrived.
 
 A machine with an NVIDIA GPU is a different story: set **Precision** to
 `float16` and the same models run several times faster.
+
+## History
+
+The microphone in the sidebar footer — next to settings and the theme switch —
+drops down the last six dictations, marking what is still being recognized and
+what only partly reached the composer. "Open History" (or the sidebar row)
+opens the full panel.
+
+The panel lists dictations newest first: when, how long, the transcript. Open
+one for the full text, a player for the recording, copy and download.
+
+- Entries whose text outran bb's wait are labelled **only part reached the
+  composer** — that label is the whole reason the panel exists.
+- What is still being recognized shows as **transcribing** and fills itself in.
+- From the terminal: `bb voice-ink history`, `bb voice-ink show <id>`,
+  `bb voice-ink forget <id>|--all`. `bb voice-ink last` prints the most recent
+  transcript.
+- Only bb's own microphone button is recorded. The plugin's streaming button
+  sends speech in pieces as you talk, and a list of half-sentences would be
+  worse than no list.
+
+Audio and text live in `<host data dir>/history/`, and nothing leaves the
+machine. Retention is two settings — *Keep at most N dictations* (200) and
+*Delete dictations older than N days* (30) — and *Keep a history of dictations*
+turns the whole thing off, which also stops the recordings from being written.
 
 ## Settings
 
@@ -102,21 +153,39 @@ A machine with an NVIDIA GPU is a different story: set **Precision** to
 | Spoken language | `auto`, `ru`, `en` — naming the language avoids misdetection on short phrases |
 | Vocabulary hints | names and terms fed to the model as context, one line |
 | Precision | `int8` (CPU), `int8_float32`, `float32` |
-| CPU threads / Batch size | leave alone unless the machine is bigger or busier; batching is off because it hands the model VAD-split chunks whose opening words the smaller models drop |
+| CPU cores recognition may use | the ceiling, default `2`; the plugin decides how to spend it (one pass with that many threads, or several parallel passes once there are at least four cores) |
+| Batch size | off by default: batching hands the model VAD-split chunks whose opening words the smaller models drop |
 | Show this plugin's own microphone button | a second, streaming button in the composer next to bb's own |
 | Python interpreter | absolute path when `faster-whisper` lives in a virtualenv |
 | Unload the model after N idle minutes | `0` keeps it loaded; unloading means the next phrase pays for the load again, which bb's own button has no time for |
+| Keep a history of dictations | records audio and transcript for the History panel; off means neither is written |
+| Keep at most N dictations | `0` lifts the cap |
+| Delete dictations older than N days | `0` keeps them for good |
 
 Changing a setting retires the resident worker; the next phrase runs on the new
 configuration.
+
+## Sharing the machine
+
+bb, the agents and everything else live on the same box, so recognition is
+capped and de-prioritized rather than allowed to take what it likes:
+
+- **CPU cores recognition may use** (default `2`) is a hard ceiling: threads per
+  pass times parallel passes never exceeds it, and the numeric libraries under
+  ONNX and NumPy are pinned to the same number before they load. Measured while
+  transcribing: 190% of one core on a four-core machine.
+- The worker runs at a **lowered priority** (nice 10), so when the machine is
+  busy the agents and the bb server get the cores first.
 
 ## How it works
 
 ```
 app.tsx          microphone button in the composer
 lib/dictation.ts capture at 16 kHz, cut at pauses, encode WAV
-server.ts        AI-service registration, settings, CLI, RPC
+server.ts        AI-service registration, settings, CLI, RPC, audio route
+components/      the History panel, its player, and the sidebar-footer drop-down
 src/host.ts      the bb.host entry, running on the machine bb runs on
+src/history.ts   recordings and transcripts on disk, and their retention
 python/worker.py resident faster-whisper process, model kept in memory
 ```
 

@@ -12,9 +12,12 @@ import {
   useSettings,
 } from "@get-bb/plugin-sdk/app";
 import { toast } from "sonner";
+import { HistoryDisclosure } from "@/components/HistoryDisclosure";
+import { HistoryPanel } from "@/components/HistoryPanel";
 import { Icon } from "@/components/ui/icon";
 import { useDictation } from "@/hooks/useDictation";
 import { cn } from "@/lib/utils";
+import { PANEL_PATH } from "./contract";
 import type { rpcContract } from "./server";
 
 function VoiceButton() {
@@ -112,5 +115,28 @@ export default definePluginApp((app) => {
   app.composer.customize({
     id: "voice-ink",
     actions: [{ id: "dictate", component: VoiceButton }],
+  });
+
+  // Dictations outlive the composer they were meant for: bb stops waiting
+  // after twenty seconds, recognition does not. This is where the whole text
+  // and the recording it came from can be found afterwards.
+  app.slots.navPanel({
+    id: "voice-ink",
+    title: "Voice Ink",
+    icon: "Mic",
+    path: PANEL_PATH,
+    component: HistoryPanel,
+  });
+
+  // The microphone in the sidebar footer, next to settings and the theme
+  // switch: the sidebar row above can be folded away under "More", and the
+  // question this answers ("did all of it get through?") comes up right after
+  // speaking, not when browsing panels.
+  app.experimental_sidebarFooter.register({
+    kind: "disclosure",
+    id: "history",
+    label: "Voice Ink history",
+    icon: "Mic",
+    component: HistoryDisclosure,
   });
 });

@@ -6,9 +6,10 @@
 // than that, so the process is kept alive between phrases and only retired
 // after an idle period or a configuration change.
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
+import os from "node:os";
 import { join } from "node:path";
 import type { EngineConfig, EngineStatus, TranscriptionResult } from "../contract.js";
 
@@ -24,6 +25,16 @@ type FailureCode =
 interface PendingRequest {
   resolve(result: TranscriptionResult): void;
   timer: ReturnType<typeof setTimeout>;
+  onPartial(text: string): void;
+}
+
+/** One recognition, shared by every caller that arrives with the same audio. */
+interface TranscriptionJob {
+  work: Promise<TranscriptionResult>;
+  startedAt: number;
+  finishedAt: number | null;
+  /** What has been recognized so far; handed over when the budget runs out. */
+  partial: string | null;
 }
 
 interface WorkerLease {
@@ -44,6 +55,15 @@ export interface WhisperEngineOptions {
 
 const READY_TIMEOUT_MS = 600_000;
 const STDERR_TAIL_LINES = 8;
+/**
+ * bb gives a transcription ten seconds per attempt and retries once. A minute
+ * of speech takes longer than that, so finished and in-flight work is kept
+ * under a key derived from the audio: the retry finds the job already running
+ * and waits for it instead of throwing the first attempt's work away.
+ */
+const JOB_RETENTION_MS = 10 * 60_000;
+/** Recognition is never left running longer than this, whatever callers do. */
+const HARD_LIMIT_MS = 15 * 60_000;
 
 function failure(code: FailureCode, message: string): TranscriptionResult {
   return { ok: false, code, message };
@@ -90,6 +110,8 @@ export class WhisperEngine {
   /** Mirrors the configured policy; 0 keeps the model loaded for good. */
   private idleUnloadMs = 0;
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly jobs = new Map<string, TranscriptionJob>();
+  private lastText: string | null = null;
 
   constructor(private readonly options: WhisperEngineOptions) {}
 
@@ -124,7 +146,8 @@ export class WhisperEngine {
         previous.pythonPath !== config.pythonPath ||
         // The punctuation model is loaded at startup, so switching it needs a
         // fresh process.
-        previous.punctuate !== config.punctuate);
+        previous.punctuate !== config.punctuate ||
+        previous.parallel !== config.parallel);
     if (restartNeeded) {
       await this.stop("configuration changed");
     }
@@ -144,19 +167,120 @@ export class WhisperEngine {
     return this.status();
   }
 
-  /** Transcribe one audio payload. Never throws: failures come back as results. */
+  /** The last transcript this worker produced, whatever became of its caller. */
+  lastTranscript(): string | null {
+    return this.lastText;
+  }
+
+  /**
+   * Transcribe one audio payload. Never throws: failures come back as results.
+   *
+   * `timeoutMs` bounds the wait, not the work. A caller that gives up leaves
+   * the recognition running, and the next caller arriving with the same audio
+   * joins it instead of starting over — which is what turns bb's retry into a
+   * second chance rather than a second full attempt.
+   */
   async transcribe(args: {
     audioBase64: string;
     mimeType: string;
     language: string | null;
     prompt: string | null;
     timeoutMs: number;
+    /**
+     * Called once with the finished result, however long that takes and
+     * whoever is still waiting — this is what lets a dictation bb gave up on
+     * still reach the history.
+     */
+    onSettled?: (result: TranscriptionResult) => void;
   }): Promise<TranscriptionResult> {
     const config = this.config;
     if (config === null) {
       return failure("service_unavailable", "voice-ink is not configured yet");
     }
+    if (args.audioBase64.length === 0) {
+      return failure("request_failed", "audio is empty");
+    }
 
+    const key = createHash("sha256")
+      .update(args.audioBase64)
+      .update(`|${args.language ?? config.language ?? ""}`)
+      .digest("hex");
+
+    this.forgetStaleJobs();
+    let job = this.jobs.get(key);
+    if (job === undefined) {
+      const created: TranscriptionJob = {
+        work: null as unknown as Promise<TranscriptionResult>,
+        startedAt: Date.now(),
+        finishedAt: null,
+        partial: null,
+      };
+      created.work = this.runTranscription(args, config, (text) => {
+        created.partial = text;
+      });
+      this.jobs.set(key, created);
+      void created.work.then(
+        (result) => {
+          created.finishedAt = Date.now();
+          if (result.ok && result.text.trim() !== "") this.lastText = result.text;
+          args.onSettled?.(result);
+        },
+        (error: unknown) => {
+          created.finishedAt = Date.now();
+          args.onSettled?.(
+            failure("service_unavailable", error instanceof Error ? error.message : String(error)),
+          );
+        },
+      );
+      job = created;
+    }
+
+    const running = job;
+    const waitedMs = Date.now() - running.startedAt;
+    const budgetMs = Math.max(1_000, args.timeoutMs);
+    return Promise.race([
+      running.work,
+      new Promise<TranscriptionResult>((resolve) => {
+        const timer = setTimeout(() => {
+          // First caller: report a timeout so bb retries and picks the finished
+          // work up. A caller that already waited through one attempt gets what
+          // has been recognized so far — a long dictation should not be lost
+          // because the last sentence was still running.
+          const partial = running.partial;
+          if (waitedMs > 1_000 && partial !== null && partial.trim() !== "") {
+            resolve({
+              ok: true,
+              text: partial.trim(),
+              audioSec: 0,
+              elapsedSec: 0,
+              partial: true,
+            });
+            return;
+          }
+          resolve(
+            failure(
+              "timeout",
+              `still transcribing after ${Math.round((waitedMs + budgetMs) / 1000)}s`,
+            ),
+          );
+        }, budgetMs);
+        timer.unref?.();
+        void running.work.finally(() => clearTimeout(timer));
+      }),
+    ]);
+  }
+
+  /** Everything one recognition does, from a started worker to a deleted temp file. */
+  private async runTranscription(
+    args: {
+      audioBase64: string;
+      mimeType: string;
+      language: string | null;
+      prompt: string | null;
+    },
+    config: EngineConfig,
+    onPartial: (text: string) => void,
+  ): Promise<TranscriptionResult> {
     let audio: Buffer;
     try {
       audio = Buffer.from(args.audioBase64, "base64");
@@ -182,7 +306,10 @@ export class WhisperEngine {
       );
     }
 
-    const audioPath = join(this.options.tempDir, `segment-${randomUUID()}${extensionFor(args.mimeType)}`);
+    const audioPath = join(
+      this.options.tempDir,
+      `segment-${randomUUID()}${extensionFor(args.mimeType)}`,
+    );
     try {
       await mkdir(this.options.tempDir, { recursive: true });
       await writeFile(audioPath, audio);
@@ -194,12 +321,27 @@ export class WhisperEngine {
           prompt: args.prompt ?? config.vocabulary,
           paragraphPauseSec: config.paragraphPauseSec,
         },
-        args.timeoutMs,
+        HARD_LIMIT_MS,
+        onPartial,
       );
     } catch (error) {
-      return failure("service_unavailable", error instanceof Error ? error.message : String(error));
+      return failure(
+        "service_unavailable",
+        error instanceof Error ? error.message : String(error),
+      );
     } finally {
+      // Only now: the worker reads this file for as long as the job runs, and
+      // the job outlives the caller that started it.
       void rm(audioPath, { force: true }).catch(() => {});
+    }
+  }
+
+  private forgetStaleJobs(): void {
+    const now = Date.now();
+    for (const [key, job] of this.jobs) {
+      if (job.finishedAt !== null && now - job.finishedAt > JOB_RETENTION_MS) {
+        this.jobs.delete(key);
+      }
     }
   }
 
@@ -244,11 +386,20 @@ export class WhisperEngine {
         join(this.options.dataDir, "models"),
         "--punctuate",
         config.punctuate ? "on" : "off",
+        "--parallel",
+        String(config.parallel),
       ],
       { stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, PYTHONUNBUFFERED: "1" } },
     ) as ChildProcessWithoutNullStreams;
 
     this.child = child;
+    // Recognition is background work by nature: when the machine is busy, the
+    // agents and the bb server should get the cores first.
+    try {
+      if (child.pid !== undefined) os.setPriority(child.pid, 10);
+    } catch {
+      // Priorities are advisory; failing to lower one changes nothing else.
+    }
     this.lease = this.options.retainWorker();
     this.stdoutBuffer = "";
     this.stderrTail = [];
@@ -355,6 +506,12 @@ export class WhisperEngine {
     if (id === null) return null;
     const waiting = this.pending.get(id);
     if (waiting === undefined) return null;
+
+    if (payload.event === "partial") {
+      if (typeof payload.text === "string") waiting.onPartial(payload.text);
+      return null;
+    }
+
     this.pending.delete(id);
     clearTimeout(waiting.timer);
 
@@ -379,6 +536,7 @@ export class WhisperEngine {
   private request(
     body: Record<string, unknown>,
     timeoutMs: number,
+    onPartial: (text: string) => void = () => {},
   ): Promise<TranscriptionResult> {
     const child = this.child;
     if (child === null) {
@@ -401,6 +559,7 @@ export class WhisperEngine {
           resolve(result);
         },
         timer,
+        onPartial,
       });
       child.stdin.write(`${JSON.stringify({ id, ...body })}\n`, (error) => {
         if (!error) return;
