@@ -41,6 +41,8 @@ export const MIGRATIONS = [
    )`,
   `CREATE INDEX comments_doc ON comments(doc_id, seq)`,
   `CREATE INDEX comments_status ON comments(status, sent_thread_id)`,
+  // 0.2: PowerPoint joined Word and Excel under family names.
+  `UPDATE docs SET kind = 'presentation' WHERE kind = 'pptx'`,
 ];
 
 export interface DocRow {

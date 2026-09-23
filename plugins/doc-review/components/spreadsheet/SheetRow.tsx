@@ -275,12 +275,17 @@ function Cell({
       );
     }
   }
+  // Sheet coordinates of the drawn box, so a click can name the cell (Doc Review comments).
   return (
     <td
       colSpan={piece.colSpan > 1 ? piece.colSpan : undefined}
       rowSpan={piece.rowSpan > 1 ? piece.rowSpan : undefined}
       className={sticky ? "ssv-s" : undefined}
       style={css}
+      data-r={layout.rows[row.pos]}
+      data-c={layout.cols[piece.col]}
+      data-r2={layout.rows[lastRow]}
+      data-c2={layout.cols[lastCol]}
     >
       {body}
     </td>
@@ -315,7 +320,14 @@ function Gap({
         : Z.frozenCol
       : Z.frozenRow;
   }
-  return <td className={sticky ? "ssv-s" : undefined} style={css} />;
+  return (
+    <td
+      className={sticky ? "ssv-s" : undefined}
+      style={css}
+      data-r={ctx.layout.rows[row.pos]}
+      data-c={ctx.layout.cols[piece.col]}
+    />
+  );
 }
 
 /** Gridlines of the empty grid past the last column, where every column has the default width. */

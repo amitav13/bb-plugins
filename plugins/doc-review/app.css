@@ -26,3 +26,34 @@
 .doc-review-textlayer > span::selection {
   background: transparent;
 }
+
+/* Cell comments in the spreadsheet view: marks painted as data attributes. */
+.doc-review-sheet td[data-dr-comment] {
+  box-shadow: inset 0 0 0 9999px color-mix(in oklab, var(--color-primary, var(--primary)) 12%, transparent);
+}
+.doc-review-sheet td[data-dr-sel] {
+  box-shadow: inset 0 0 0 9999px color-mix(in oklab, var(--color-primary, var(--primary)) 24%, transparent);
+}
+.doc-review-sheet td[data-dr-active] {
+  outline: 2px solid var(--color-primary, var(--primary));
+  outline-offset: -2px;
+}
+.doc-review-sheet td[data-dr-pin]:not(.ssv-s) {
+  position: relative;
+}
+.doc-review-sheet td[data-dr-pin]::after {
+  content: attr(data-dr-pin);
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  z-index: 1;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: var(--color-primary, var(--primary));
+  color: var(--color-primary-foreground, var(--primary-foreground));
+  font: 600 10px/14px system-ui, sans-serif;
+  text-align: center;
+  pointer-events: none;
+}

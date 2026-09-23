@@ -1,9 +1,7 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
-import type { OpenResult } from "@/server";
-
-type NeedsLibreOfficeResult = Extract<OpenResult, { view: "needs-libreoffice" }>;
+import type { NeedsLibreOffice as NeedsLibreOfficeResult } from "@/src/contract";
 
 /**
  * Install commands for the machine bb runs on — which is not necessarily the
@@ -65,9 +63,14 @@ function CommandLine({ label, command }: { label: string; command: string }) {
 
 export function NeedsLibreOffice({
   result,
+  name,
+  downloadUrl,
   onReload,
 }: {
   result: NeedsLibreOfficeResult;
+  name: string;
+  /** The original file, when a link could be minted. */
+  downloadUrl: string | null;
   onReload: () => void;
 }) {
   const kind = result.component === "impress" ? "PowerPoint" : "Word";
@@ -101,12 +104,14 @@ export function NeedsLibreOffice({
             <Icon name="RotateCcw" aria-hidden />
             Try again
           </Button>
-          <Button size="sm" variant="ghost" asChild>
-            <a href={result.download.url} download={result.file.name}>
-              <Icon name="Download" aria-hidden />
-              Download
-            </a>
-          </Button>
+          {downloadUrl ? (
+            <Button size="sm" variant="ghost" asChild>
+              <a href={downloadUrl} download={name}>
+                <Icon name="Download" aria-hidden />
+                Download
+              </a>
+            </Button>
+          ) : null}
         </div>
       </div>
     </div>

@@ -158,10 +158,10 @@ What is claimed: text, ebooks, config and data, code, web, images, audio,
 video, archives and packages, fonts and binaries — about 200 extensions. Two
 things are outside it. Documents — `.pdf`, Word, Excel and PowerPoint files
 (`.doc`, `.docx`, `.xls`, `.xlsx`, `.ppt`, `.pptx`), their OpenDocument
-counterparts (`.odt`, `.ods`, `.odp`) and `.rtf` — are left to the pdf-viewer
-plugin, which renders them: bb opens a link with the first matching plugin in
-id order, and `file-manager` comes before `pdf-viewer`, so claiming them here
-would hide the viewer behind a preview that cannot show them. And a name with
+counterparts (`.odt`, `.ods`, `.odp`) and `.rtf` — are left to the doc-review
+plugin, which renders them and takes comments on them (it absorbed the former
+pdf-viewer): a preview here could not show them, so claiming them would only
+add a weaker choice to *Open with*. And a name with
 no extension at all (`Makefile`, `LICENSE`, `.env`) gets no *Open with* rows
 from any plugin — bb matches openers by extension, so there is nothing for a
 plugin to claim.

@@ -2,6 +2,7 @@
 // imports only its type, so zod never reaches the frontend bundle.
 import { defineRpcContract } from "@get-bb/plugin-sdk";
 import { z } from "zod";
+import type { SheetData } from "../lib/sheet-model.js";
 
 const rectSchema = z
   .object({
@@ -42,6 +43,15 @@ export const anchorSchema = z.discriminatedUnion("kind", [
       text: z.string().max(MAX_QUOTE),
     })
     .strict(),
+  z
+    .object({
+      kind: z.literal("cell"),
+      sheet: z.string().min(1).max(200),
+      sheetIndex: z.number().int().min(0),
+      ref: z.string().regex(/^[A-Z]{1,3}[0-9]{1,7}(:[A-Z]{1,3}[0-9]{1,7})?$/),
+      text: z.string().max(MAX_QUOTE),
+    })
+    .strict(),
 ]);
 
 const statusSchema = z.enum(["draft", "sent", "replied", "resolved"]);
@@ -61,9 +71,11 @@ export const commentSchema = z.object({
   resolvedAt: z.number().nullable(),
 });
 
+const kindSchema = z.enum(["md", "pdf", "text", "presentation", "spreadsheet"]);
+
 const docSchema = z.object({
   id: z.string(),
-  kind: z.enum(["md", "pdf", "pptx"]),
+  kind: kindSchema,
   name: z.string(),
   absPath: z.string(),
   hostId: z.string().nullable(),
@@ -79,6 +91,50 @@ export const openerSourceSchema = z
     experimental_hostId: z.string().nullable().optional(),
   })
   .strip();
+
+const linkSchema = z.object({ url: z.string(), expiresAtMs: z.number() });
+
+const needsLibreOfficeSchema = z.object({
+  status: z.literal("needs-libreoffice"),
+  /** The LibreOffice module this file needs. */
+  component: z.enum(["writer", "impress"]),
+  /** False when no LibreOffice was found at all. */
+  installed: z.boolean(),
+  /** The server's platform: install instructions are for that machine. */
+  platform: z.enum(["linux", "darwin", "win32", "other"]),
+});
+
+const workbookSummarySchema = z.object({
+  sheets: z.array(
+    z.object({
+      name: z.string(),
+      hidden: z.boolean(),
+      kind: z.enum(["worksheet", "chartsheet", "other"]),
+    }),
+  ),
+  activeSheet: z.number().int(),
+});
+
+/**
+ * The readers build the grid; validating up to 100k cells field by field on
+ * every response would cost more than it protects.
+ */
+const sheetDataSchema = z.custom<SheetData>(
+  (value) =>
+    typeof value === "object" &&
+    value !== null &&
+    Array.isArray((value as { rows?: unknown }).rows),
+);
+
+/** BCP 47 tag from the browser; formats dates and numbers like Excel would there. */
+const localeSchema = z.string().max(64).optional();
+
+const recentSchema = z.object({
+  path: z.string(),
+  name: z.string(),
+  hostId: z.string().nullable(),
+  openedAtMs: z.number(),
+});
 
 const sendTargetSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("thread"), threadId: z.string().min(1) }).strict(),
@@ -98,7 +154,12 @@ const BODY_MAX = 8000;
 export const rpcContract = defineRpcContract({
   "doc.open": {
     input: z
-      .object({ path: z.string().min(1), source: openerSourceSchema })
+      .object({
+        path: z.string().min(1),
+        source: openerSourceSchema,
+        /** Add it to the Doc Review page's recent files. */
+        remember: z.boolean().optional(),
+      })
       .strict(),
     output: z.object({ doc: docSchema }),
   },
@@ -112,7 +173,7 @@ export const rpcContract = defineRpcContract({
       docs: z.array(
         z.object({
           id: z.string(),
-          kind: z.enum(["md", "pdf", "pptx"]),
+          kind: kindSchema,
           name: z.string(),
           absPath: z.string(),
           hostId: z.string().nullable(),
@@ -142,17 +203,82 @@ export const rpcContract = defineRpcContract({
   },
   "doc.pages": {
     input: z.object({ docId: z.string() }).strict(),
+    output: z.discriminatedUnion("status", [
+      z.object({
+        status: z.literal("ready"),
+        version: z.string(),
+        pages: z.array(
+          z.object({
+            n: z.number(),
+            width: z.number(),
+            height: z.number(),
+            url: z.string(),
+          }),
+        ),
+      }),
+      needsLibreOfficeSchema,
+    ]),
+  },
+  /** URLs for the classic PDF view (null when there is no PDF) and the original file. */
+  "doc.links": {
+    input: z.object({ docId: z.string() }).strict(),
+    output: z.object({ document: linkSchema.nullable(), download: linkSchema }),
+  },
+  "sheet.open": {
+    input: z.object({ docId: z.string(), locale: localeSchema }).strict(),
     output: z.object({
       version: z.string(),
-      pages: z.array(
+      workbook: workbookSummarySchema,
+      sheet: sheetDataSchema,
+      /** "basic" when only values and fills could be read. */
+      fidelity: z.enum(["full", "basic"]),
+    }),
+  },
+  "sheet.read": {
+    input: z
+      .object({ docId: z.string(), index: z.number().int().min(0), locale: localeSchema })
+      .strict(),
+    output: z.object({ sheet: sheetDataSchema }),
+  },
+  hosts: {
+    input: z.null(),
+    output: z.object({
+      hosts: z.array(
         z.object({
-          n: z.number(),
-          width: z.number(),
-          height: z.number(),
-          url: z.string(),
+          id: z.string(),
+          name: z.string(),
+          status: z.enum(["connected", "disconnected"]),
         }),
       ),
     }),
+  },
+  browse: {
+    input: z
+      .object({
+        hostId: z.string().nullable().optional(),
+        path: z.string().nullable().optional(),
+      })
+      .strict(),
+    output: z.object({
+      hostId: z.string(),
+      directory: z.string(),
+      parent: z.string().nullable(),
+      entries: z.array(
+        z.object({
+          name: z.string(),
+          path: z.string(),
+          kind: z.enum(["directory", "file"]),
+        }),
+      ),
+    }),
+  },
+  recents: {
+    input: z.null(),
+    output: z.object({ recents: z.array(recentSchema) }),
+  },
+  "recents.clear": {
+    input: z.null(),
+    output: z.object({ recents: z.array(recentSchema) }),
   },
   "doc.pageText": {
     input: z
@@ -226,3 +352,7 @@ export const rpcContract = defineRpcContract({
 });
 
 export type RpcContract = typeof rpcContract;
+export type ViewerLink = z.infer<typeof linkSchema>;
+export type NeedsLibreOffice = z.infer<typeof needsLibreOfficeSchema>;
+export type WorkbookSummary = z.infer<typeof workbookSummarySchema>;
+export type RecentDocument = z.infer<typeof recentSchema>;

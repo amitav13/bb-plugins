@@ -1,6 +1,6 @@
 ---
 name: doc-review
-description: Apply review comments that the user left on a Markdown, PDF, or PPTX file in bb's Doc Review panel, and report each one back with `bb doc-review`. Use when a message starts with "Review comments on" or lists comment ids like c_ab12cd, or when the user asks to handle, fix, or answer their review comments.
+description: Apply review comments that the user left on a Markdown, PDF, Word, PowerPoint, or Excel file in bb's Doc Review panel, and report each one back with `bb doc-review`. Use when a message starts with "Review comments on" or lists comment ids like c_ab12cd, or when the user asks to handle, fix, or answer their review comments.
 ---
 
 # Doc Review comments
@@ -17,8 +17,16 @@ report each one as you finish it.
    numbers point at the version the user saw, and earlier edits may shift them.
 2. Apply the change the comment asks for. Keep everything else as it was.
    - Markdown: edit the file directly.
-   - PPTX: edit the deck itself (python-pptx, or the pptx skill when present)
-     and keep its layout, fonts, and colors. Slide numbers are 1-based.
+   - PowerPoint: edit the deck itself (python-pptx, or the pptx skill when
+     present) and keep its layout, fonts, and colors. Slide numbers are 1-based.
+   - Word: edit the document itself (python-docx, or the docx skill when
+     present) and keep its styles. Page numbers come from a PDF rendering and
+     can differ from Word's; find places by the quoted text.
+   - Excel: a comment names a sheet and a cell or range, like `Бюджет!B4` or
+     `Sheet1!B3:D7`. Edit the workbook itself (openpyxl, or the xlsx skill when
+     present) and keep formatting and formulas; openpyxl drops cached formula
+     values, so recalculate (for example by converting with LibreOffice) when
+     the file must show totals without Excel.
    - PDF: find the source it was generated from (Markdown, HTML, PPTX, a
      script) and regenerate the PDF after editing the source. With no source,
      do not rebuild the PDF by hand; reply with what you cannot change.

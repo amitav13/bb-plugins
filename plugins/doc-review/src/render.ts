@@ -1,9 +1,8 @@
-// Page rendering for PDF and PPTX documents on the bb server's machine.
-//
-// A PPTX is converted to PDF once per version with LibreOffice. Pages are
-// rendered to PNG with poppler's pdftoppm on first request, and the text layer
-// comes from pdftotext's word boxes. Everything is cached per document
-// version under the plugin's data directory.
+// Page rendering on the bb server's machine: pages of a PDF (the document
+// itself, or LibreOffice's rendering of a Word or PowerPoint file — see
+// viewer.ts) rendered to PNG by poppler's pdftoppm on first request, word
+// boxes from pdftotext for the selectable text layer, and crops for area
+// comments. Output is cached per document version in the plugin's data dir.
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
@@ -18,7 +17,6 @@ export interface PageSize {
 
 /** Rendered page width in pixels: sharp on a retina panel, small enough to stream. */
 const PAGE_PIXEL_WIDTH = 1600;
-const CONVERT_TIMEOUT_MS = 180_000;
 const RENDER_TIMEOUT_MS = 60_000;
 const VERSIONS_KEPT = 2;
 
@@ -66,8 +64,6 @@ async function exists(file: string): Promise<boolean> {
 }
 
 export class Renderer {
-  /** One LibreOffice conversion at a time: soffice cannot share a profile concurrently. */
-  private convertQueue: Promise<unknown> = Promise.resolve();
   /** Deduplicates concurrent work that produces the same file. */
   private readonly inFlight = new Map<string, Promise<unknown>>();
 
@@ -84,66 +80,6 @@ export class Renderer {
     const promise = work().finally(() => this.inFlight.delete(key));
     this.inFlight.set(key, promise);
     return promise;
-  }
-
-  /**
-   * The PDF to render for this document version. `sourcePath` is a readable
-   * local file (the document itself, or a local copy of a remote one).
-   */
-  async pdfFor(input: {
-    docId: string;
-    version: string;
-    kind: "pdf" | "pptx";
-    sourcePath: string;
-  }): Promise<string> {
-    if (input.kind === "pdf") return input.sourcePath;
-    const dir = this.versionDir(input.docId, input.version);
-    const target = path.join(dir, "doc.pdf");
-    if (await exists(target)) return target;
-    return this.once(target, async () => {
-      await mkdir(dir, { recursive: true });
-      await this.pruneVersions(input.docId, dir);
-      const next = this.convertQueue.then(() => this.convertToPdf(input.sourcePath, dir, target));
-      this.convertQueue = next.catch(() => undefined);
-      await next;
-      return target;
-    });
-  }
-
-  private async convertToPdf(source: string, dir: string, target: string): Promise<void> {
-    const outDir = path.join(dir, "convert");
-    await rm(outDir, { recursive: true, force: true });
-    await mkdir(outDir, { recursive: true });
-    const profile = path.join(this.root, "soffice-profile");
-    await mkdir(profile, { recursive: true });
-    try {
-      await run(
-        "soffice",
-        [
-          `-env:UserInstallation=file://${profile}`,
-          "--headless",
-          "--norestore",
-          "--convert-to",
-          "pdf",
-          "--outdir",
-          outDir,
-          source,
-        ],
-        // Keep HOME: fontconfig finds the user's own fonts (~/.fonts) through it.
-        { timeoutMs: CONVERT_TIMEOUT_MS },
-      );
-    } catch (error) {
-      if (error instanceof ToolMissingError) {
-        throw new ToolMissingError(
-          "Slides need LibreOffice on the bb server: install it (soffice) to review .pptx files.",
-        );
-      }
-      throw error;
-    }
-    const produced = (await readdir(outDir)).find((name) => name.toLowerCase().endsWith(".pdf"));
-    if (!produced) throw new Error("LibreOffice produced no PDF for this presentation.");
-    await rename(path.join(outDir, produced), target);
-    await rm(outDir, { recursive: true, force: true });
   }
 
   /** Drops cached versions of a document except the newest few. */
@@ -174,6 +110,8 @@ export class Renderer {
     );
     if (hit) return hit;
     return this.once(cached, async () => {
+      await mkdir(dir, { recursive: true });
+      await this.pruneVersions(docId, dir);
       const output = await run("pdfinfo", ["-f", "1", "-l", "100000", pdfPath], {
         timeoutMs: RENDER_TIMEOUT_MS,
       }).catch((error: unknown) => {

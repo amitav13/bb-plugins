@@ -20,8 +20,16 @@ import {
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
+import { NeedsLibreOffice } from "@/components/viewer/NeedsLibreOffice";
+import type { SheetData } from "@/lib/sheet-model";
+import type {
+  NeedsLibreOffice as NeedsLibreOfficeResult,
+  ViewerLink,
+  WorkbookSummary,
+} from "../src/contract";
 import {
   anchorLabel,
+  isPaged,
   type Anchor,
   type PageInfo,
   type ReviewComment,
@@ -31,6 +39,7 @@ import { CommentEditor } from "./comment-editor";
 import { CommentList, type CommentActions } from "./comment-list";
 import { MarkdownDoc, type Point } from "./markdown-doc";
 import { PagesDoc, type PageMode } from "./pages-doc";
+import { SheetDoc } from "./sheet-doc";
 import { errorText, useComments, useReviewDoc, useReviewRpc } from "./use-review";
 
 /** Below this panel width the comment list becomes a bottom sheet. */
@@ -58,7 +67,9 @@ function useWidth(element: RefObject<HTMLElement | null>): number {
 
 type Content =
   | { kind: "md"; version: string; content: string; assetBaseUrl: string | null }
-  | { kind: "pages"; version: string; pages: PageInfo[] };
+  | { kind: "pages"; version: string; pages: PageInfo[] }
+  | { kind: "needs-libreoffice"; missing: NeedsLibreOfficeResult }
+  | { kind: "sheet"; version: string; workbook: WorkbookSummary; sheet: SheetData };
 
 /** Loads the document body for the current version; keeps the last one while reloading. */
 function useDocContent(doc: ReviewDoc) {
@@ -70,11 +81,20 @@ function useDocContent(doc: ReviewDoc) {
   useEffect(() => {
     let alive = true;
     setError(null);
-    const request =
-      doc.kind === "md"
-        ? rpc.call("doc.markdown", { docId: doc.id }).then((result): Content => ({ kind: "md", ...result }))
-        : rpc.call("doc.pages", { docId: doc.id }).then((result): Content => ({ kind: "pages", ...result }));
-    request.then(
+    const load = async (): Promise<Content> => {
+      if (doc.kind === "md") {
+        return { kind: "md", ...(await rpc.call("doc.markdown", { docId: doc.id })) };
+      }
+      if (doc.kind === "spreadsheet") {
+        const opened = await rpc.call("sheet.open", { docId: doc.id, locale: navigator.language || "en-US" });
+        return { kind: "sheet", version: opened.version, workbook: opened.workbook, sheet: opened.sheet };
+      }
+      const pages = await rpc.call("doc.pages", { docId: doc.id });
+      return pages.status === "ready"
+        ? { kind: "pages", version: pages.version, pages: pages.pages }
+        : { kind: "needs-libreoffice", missing: pages };
+    };
+    load().then(
       (next) => alive && setContent(next),
       (cause: unknown) => alive && setError(errorText(cause)),
     );
@@ -91,8 +111,33 @@ function useDocContent(doc: ReviewDoc) {
     lastStale.current = now;
     setReload((value) => value + 1);
   }, []);
+  const retry = useCallback(() => setReload((value) => value + 1), []);
 
-  return { content, error, onStale };
+  return { content, error, onStale, retry };
+}
+
+/** Refresh URLs well before their one-hour lease expires. */
+const LINK_REFRESH_MS = 45 * 60 * 1000;
+
+/** URLs for the classic PDF view and the original file, kept fresh while the tab is open. */
+function useDocLinks(doc: ReviewDoc) {
+  const rpc = useReviewRpc();
+  const [links, setLinks] = useState<{ document: ViewerLink | null; download: ViewerLink } | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const load = () =>
+      rpc.call("doc.links", { docId: doc.id }).then(
+        (next) => alive && setLinks(next),
+        () => undefined,
+      );
+    void load();
+    const timer = window.setInterval(load, LINK_REFRESH_MS);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+    };
+  }, [rpc, doc.id, doc.version]);
+  return links;
 }
 
 function SendMenu({
@@ -203,7 +248,12 @@ export function Workspace({
   const wide = useWidth(root) >= WIDE_MIN_PX;
 
   const { comments, error: commentsError, refetch, setComments } = useComments(doc.id);
-  const { content, error: contentError, onStale } = useDocContent(doc);
+  const { content, error: contentError, onStale, retry } = useDocContent(doc);
+  const links = useDocLinks(doc);
+  const paged = isPaged(doc.kind);
+  // The classic view is the browser's own PDF viewer: search, zoom, print.
+  const [classic, setClassic] = useState(false);
+  const showClassic = classic && paged && Boolean(links?.document);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [scrollRequest, setScrollRequest] = useState(0);
   const [pending, setPending] = useState<{ anchor: Anchor; point: Point; range: Range | null } | null>(
@@ -363,21 +413,63 @@ export function Workspace({
     />
   );
 
+  const loadingLabel =
+    doc.kind === "text" || doc.kind === "presentation"
+      ? "Converting to PDF…"
+      : doc.kind === "spreadsheet"
+        ? "Reading the workbook…"
+        : doc.kind === "pdf"
+          ? "Rendering pages…"
+          : "Loading…";
+
   const body = contentError ? (
     <Centered>
       <p className="text-foreground">Could not render this file.</p>
       <p className="max-w-md text-xs">{contentError}</p>
-      {onShowOriginal ? (
-        <Button type="button" variant="outline" size="sm" onClick={onShowOriginal}>
-          Open bb's preview
+      <div className="flex gap-2">
+        <Button type="button" variant="outline" size="sm" onClick={retry}>
+          Try again
         </Button>
-      ) : null}
+        {onShowOriginal ? (
+          <Button type="button" variant="ghost" size="sm" onClick={onShowOriginal}>
+            Open bb's preview
+          </Button>
+        ) : null}
+      </div>
     </Centered>
   ) : !content ? (
     <Centered>
       <Icon name="Loading" className="size-5 animate-spin" />
-      <p>{doc.kind === "pptx" ? "Rendering slides…" : doc.kind === "pdf" ? "Rendering pages…" : "Loading…"}</p>
+      <p>{loadingLabel}</p>
     </Centered>
+  ) : showClassic && links?.document ? (
+    <iframe
+      key={`${doc.id}:${doc.version}`}
+      src={links.document.url}
+      title={doc.name}
+      className="absolute inset-0 h-full w-full border-0 bg-muted"
+    />
+  ) : content.kind === "needs-libreoffice" ? (
+    <NeedsLibreOffice
+      result={content.missing}
+      name={doc.name}
+      downloadUrl={links?.download.url ?? null}
+      onReload={retry}
+    />
+  ) : content.kind === "sheet" ? (
+    <SheetDoc
+      key={`${doc.id}:${content.version}`}
+      docId={doc.id}
+      initial={content}
+      comments={list}
+      activeId={activeId}
+      scrollRequest={scrollRequest}
+      pendingAnchor={pending?.anchor ?? null}
+      composer={composer}
+      composerPoint={pending?.point ?? null}
+      onRequestComment={requestComment}
+      onSelectComment={selectFromDoc}
+    />
   ) : content.kind === "md" ? (
     <MarkdownDoc
       instanceId={instanceId}
@@ -414,7 +506,8 @@ export function Workspace({
     />
   );
 
-  const hasPages = doc.kind !== "md";
+  const hasPages = paged && content?.kind === "pages" && !showClassic;
+  const ownScroll = content?.kind === "sheet" || showClassic;
   return (
     <div ref={root} className="relative flex h-full min-h-0 flex-col bg-background">
       <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
@@ -442,7 +535,21 @@ export function Workspace({
           {needsYou > 0 ? `${needsYou} answered · ` : ""}
           {list.length === 0 ? "No comments yet" : `${list.length} comment${list.length === 1 ? "" : "s"}`}
         </div>
-        {onShowOriginal ? (
+        {paged && links?.document ? (
+          <Button
+            type="button"
+            variant={showClassic ? "secondary" : "ghost"}
+            size="sm"
+            className="h-8 px-2 text-xs"
+            aria-pressed={showClassic}
+            aria-label={showClassic ? "Back to commenting" : "Classic view: search, zoom, print"}
+            onClick={() => setClassic((value) => !value)}
+          >
+            <Icon name={showClassic ? "MessageSquare" : "ZoomIn"} className="size-4" />
+            {showClassic ? "Comment" : "Classic"}
+          </Button>
+        ) : null}
+        {doc.kind === "md" && onShowOriginal ? (
           <Button
             type="button"
             variant="ghost"
@@ -452,6 +559,13 @@ export function Workspace({
             onClick={onShowOriginal}
           >
             <Icon name="Eye" className="size-4" />
+          </Button>
+        ) : null}
+        {links ? (
+          <Button asChild type="button" variant="ghost" size="icon" className="size-8 text-muted-foreground">
+            <a href={links.download.url} download={doc.name} aria-label={`Download ${doc.name}`}>
+              <Icon name="Download" className="size-4" />
+            </a>
           </Button>
         ) : null}
         {wide ? null : (
@@ -475,7 +589,7 @@ export function Workspace({
         />
       </div>
       <div className="flex min-h-0 flex-1">
-        <div ref={scroller} className="relative min-w-0 flex-1 overflow-auto">
+        <div ref={scroller} className={cn("relative min-w-0 flex-1", ownScroll ? "overflow-hidden" : "overflow-auto")}>
           {body}
         </div>
         {wide ? (

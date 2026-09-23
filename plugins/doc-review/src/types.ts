@@ -1,7 +1,23 @@
 // Shared, dependency-free types and helpers. Both server.ts and app.tsx import
 // this module, so it must stay free of Node and zod imports.
 
-export type DocKind = "md" | "pdf" | "pptx";
+import { documentFamily, extensionOf } from "../lib/formats.js";
+
+/**
+ * - `md`: Markdown, rendered as text.
+ * - `pdf`: pages as they are.
+ * - `text` (Word, ODT, RTF) and `presentation` (PowerPoint, ODP): converted
+ *   to PDF by LibreOffice, then shown as pages.
+ * - `spreadsheet` (Excel, ODS): a grid of cells.
+ */
+export type DocKind = "md" | "pdf" | "text" | "presentation" | "spreadsheet";
+
+/** Kinds shown as rendered pages. */
+export type PagedKind = "pdf" | "text" | "presentation";
+
+export function isPaged(kind: DocKind): kind is PagedKind {
+  return kind === "pdf" || kind === "text" || kind === "presentation";
+}
 
 /** A rectangle in page coordinates normalized to 0..1 of the page size. */
 export interface Rect {
@@ -29,7 +45,17 @@ export type Anchor =
       endLine: number;
     }
   | { kind: "page-text"; page: number; quote: string; rects: Rect[] }
-  | { kind: "page-area"; page: number; rect: Rect; text: string };
+  | { kind: "page-area"; page: number; rect: Rect; text: string }
+  | {
+      kind: "cell";
+      /** Sheet name as the workbook shows it, and its 0-based position. */
+      sheet: string;
+      sheetIndex: number;
+      /** A1-style cell or range, like "B3" or "B3:D7". */
+      ref: string;
+      /** The displayed values in the range, for context. */
+      text: string;
+    };
 
 /**
  * - `draft`: written, not handed to an agent yet.
@@ -85,22 +111,17 @@ export interface PageText {
   lines: PageWord[][];
 }
 
-export const DOC_EXTENSIONS: Record<string, DocKind> = {
-  md: "md",
-  markdown: "md",
-  pdf: "pdf",
-  pptx: "pptx",
-};
+export const MARKDOWN_EXTENSIONS = ["md", "markdown"] as const;
 
 export function docKindFor(path: string): DocKind | null {
-  const match = /\.([A-Za-z0-9]+)$/.exec(path);
-  if (!match) return null;
-  return DOC_EXTENSIONS[match[1]!.toLowerCase()] ?? null;
+  const extension = extensionOf(path);
+  if ((MARKDOWN_EXTENSIONS as readonly string[]).includes(extension)) return "md";
+  return documentFamily(path);
 }
 
 /** "Slide" for decks, "Page" for everything else. */
 export function pageNoun(kind: DocKind): "Slide" | "Page" {
-  return kind === "pptx" ? "Slide" : "Page";
+  return kind === "presentation" ? "Slide" : "Page";
 }
 
 /** A short human label for where a comment points. */
@@ -116,6 +137,8 @@ export function anchorLabel(anchor: Anchor, kind: DocKind): string {
       return `${pageNoun(kind)} ${anchor.page}`;
     case "page-area":
       return `${pageNoun(kind)} ${anchor.page}, area`;
+    case "cell":
+      return `${anchor.sheet}!${anchor.ref}`;
   }
 }
 
@@ -126,6 +149,7 @@ export function anchorQuote(anchor: Anchor): string | null {
     case "page-text":
       return anchor.quote;
     case "page-area":
+    case "cell":
       return anchor.text || null;
     case "doc":
       return null;

@@ -26,6 +26,10 @@ import {
   Copy01Icon,
   DashedLineCircleIcon,
   Delete02Icon,
+  Doc01Icon,
+  Pdf01Icon,
+  Ppt01Icon,
+  Xls01Icon,
   Download01Icon,
   Edit02Icon,
   FilterHorizontalIcon,
@@ -164,6 +168,11 @@ const CORE_ICON_MAP = {
   Workflow: WorkflowCircle03Icon,
   X: Cancel01Icon,
   Zap: ZapIcon,
+  // File types, for the viewer's header and file lists.
+  FilePdf: Pdf01Icon,
+  FileWord: Doc01Icon,
+  FilePowerPoint: Ppt01Icon,
+  FileExcel: Xls01Icon,
 } as const satisfies Record<string, IconSvgElement>;
 
 type CoreIconName = keyof typeof CORE_ICON_MAP;

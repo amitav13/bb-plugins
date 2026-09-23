@@ -21,6 +21,9 @@ function quoteFor(comment: ReviewComment): string | null {
   if (anchor.kind === "page-area" && anchor.text.trim()) {
     return `text in the area: «${truncate(anchor.text, QUOTE_MAX)}»`;
   }
+  if (anchor.kind === "cell" && anchor.text.trim()) {
+    return `value: «${truncate(anchor.text, QUOTE_MAX)}»`;
+  }
   return null;
 }
 
@@ -28,8 +31,12 @@ function kindHint(kind: DocKind): string {
   switch (kind) {
     case "md":
       return "Line numbers refer to the file as it was when the comments were written; match by the quoted text if lines have shifted.";
-    case "pptx":
-      return "Slide numbers are 1-based. Edit the .pptx itself (for example with python-pptx) and keep its design; area images show what the comment points at.";
+    case "presentation":
+      return "Slide numbers are 1-based. Edit the presentation itself (for .pptx, python-pptx) and keep its design; area images show what the comment points at.";
+    case "text":
+      return "Page numbers come from a PDF rendering and can differ from the editor's own pagination; find places by the quoted text. Edit the document itself (for .docx, python-docx) and keep its formatting.";
+    case "spreadsheet":
+      return "Cells are A1 references on the named sheet. Edit the workbook itself (for .xlsx, openpyxl) and keep its formatting and formulas.";
     case "pdf":
       return "Page numbers are 1-based. If this PDF is generated from a source file (Markdown, HTML, PPTX, …), edit the source and regenerate the PDF; otherwise say what you cannot change.";
   }

@@ -20,10 +20,6 @@
       "source": "./plugins/file-manager"
     },
     {
-      "name": "pdf-viewer",
-      "source": "./plugins/pdf-viewer"
-    },
-    {
       "name": "server-status",
       "source": "./plugins/server-status"
     },

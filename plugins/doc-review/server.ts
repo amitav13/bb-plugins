@@ -1,20 +1,36 @@
 // bb-plugin-doc-review — backend entry.
 //
-// Leave comments on a Markdown, PDF, or PPTX file in a panel tab and hand them
-// to an agent in one message. Comments live in this plugin's SQLite database;
-// the reviewed file is never modified by the plugin. Agents report back with
-// the `bb doc-review` command, and every change reaches open panels through a
-// realtime signal.
+// View and comment on Markdown, PDF, Word, PowerPoint, and Excel files in a
+// panel tab, then hand the comments to an agent in one message. Viewing
+// (LibreOffice conversions, workbooks, links for the classic PDF view) lives
+// in src/viewer.ts; page images and text boxes in src/render.ts. Comments live
+// in this plugin's SQLite database; the reviewed file is never modified by
+// the plugin. Agents report back with the `bb doc-review` command, and every
+// change reaches open panels through a realtime signal.
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
-import { rpcContract } from "./src/contract.js";
+import { isSupportedPath } from "./lib/formats.js";
+import { rpcContract, type RecentDocument } from "./src/contract.js";
 import { reviewCli } from "./src/cli.js";
 import { DocFiles } from "./src/files.js";
 import { buildHandoffMessage } from "./src/message.js";
 import { Renderer, type PageSize } from "./src/render.js";
 import { MIGRATIONS, ReviewStore, type Db, type DocRow } from "./src/store.js";
-import { docKindFor, type ReviewComment, type ReviewDoc } from "./src/types.js";
+import {
+  docKindFor,
+  isPaged,
+  MARKDOWN_EXTENSIONS,
+  type ReviewComment,
+  type ReviewDoc,
+} from "./src/types.js";
+import {
+  createViewer,
+  normalizeLocale,
+  serverPlatform,
+  type Located,
+  type MissingLibreOffice,
+} from "./src/viewer.js";
 
 export { rpcContract };
 export type { RpcContract } from "./src/contract.js";
@@ -24,6 +40,19 @@ const CHANGED = "review-changed";
 const PAGE_ROUTE = "/page";
 const NO_PROJECT =
   "This file is not in a project, so a new chat cannot be started from here.";
+const RECENTS_KEY = "recent-documents";
+const RECENTS_LIMIT = 12;
+
+/** Thrown where pages are needed but LibreOffice cannot make them. */
+class NeedsLibreOfficeError extends Error {
+  constructor(readonly missing: MissingLibreOffice) {
+    super(
+      missing.installed
+        ? `LibreOffice ${missing.component === "impress" ? "Impress" : "Writer"} is needed to show this file.`
+        : "LibreOffice is needed to show this file.",
+    );
+  }
+}
 
 export default async function plugin(bb: BbPluginApi) {
   const database = bb.storage.database();
@@ -32,6 +61,30 @@ export default async function plugin(bb: BbPluginApi) {
   const dataDir = path.dirname(database.name);
   const files = new DocFiles(bb, dataDir);
   const renderer = new Renderer(dataDir);
+
+  const settings = bb.settings.define({
+    rememberRecents: {
+      type: "boolean",
+      label: "Remember recently opened documents",
+      default: true,
+    },
+    libreOfficePath: {
+      type: "string",
+      label: "LibreOffice executable",
+      description:
+        "Word and PowerPoint files are converted with LibreOffice on the machine bb runs on. Leave empty to find it automatically; set the full path to soffice if it lives somewhere unusual.",
+      default: "",
+    },
+  });
+  const viewer = createViewer(bb, {
+    dataDir,
+    localHostId: () => files.localHostId(),
+    libreOfficePath: async () => (await settings.get()).libreOfficePath,
+  });
+
+  function located(doc: DocRow): Located {
+    return { absPath: doc.absPath, hostId: doc.hostId };
+  }
 
   function publish(docIds: string[]): void {
     if (docIds.length > 0) bb.realtime.publish(CHANGED, { docIds });
@@ -60,28 +113,38 @@ export default async function plugin(bb: BbPluginApi) {
     };
   }
 
-  /** Remote documents are copied locally once per version for rendering. */
-  const localCopies = new Map<string, Promise<string>>();
-  function localSource(doc: DocRow, version: string): Promise<string> {
-    if (doc.hostId === null) return Promise.resolve(doc.absPath);
-    const key = `${doc.id}:${version}`;
-    let copy = localCopies.get(key);
-    if (!copy) {
-      copy = files.localPath(doc, version);
-      copy.catch(() => localCopies.delete(key));
-      localCopies.set(key, copy);
-    }
-    return copy;
+  /** The PDF whose pages are shown: the file itself, or LibreOffice's rendering of it. */
+  async function pdfFor(doc: DocRow): Promise<string> {
+    if (!isPaged(doc.kind)) throw new Error("This kind of document has no pages.");
+    const file = await viewer.localFile(located(doc));
+    if (doc.kind === "pdf") return file.path;
+    const converted = await viewer.convertedPdf(file, path.posix.basename(doc.absPath), doc.kind);
+    if (typeof converted !== "string") throw new NeedsLibreOfficeError(converted);
+    return converted;
   }
 
-  async function pdfFor(doc: DocRow, version: string): Promise<string> {
-    if (doc.kind === "md") throw new Error("Markdown has no pages.");
-    return renderer.pdfFor({
-      docId: doc.id,
-      version,
-      kind: doc.kind,
-      sourcePath: await localSource(doc, version),
-    });
+  async function readRecents(): Promise<RecentDocument[]> {
+    return (await bb.storage.kv.get<RecentDocument[]>(RECENTS_KEY)) ?? [];
+  }
+
+  async function rememberDocument(doc: DocRow): Promise<void> {
+    if (!(await settings.get()).rememberRecents) return;
+    const hostId = doc.hostId;
+    const next = [
+      { path: doc.absPath, name: path.posix.basename(doc.absPath), hostId, openedAtMs: Date.now() },
+      ...(await readRecents()).filter((entry) => entry.path !== doc.absPath || entry.hostId !== hostId),
+    ].slice(0, RECENTS_LIMIT);
+    await bb.storage.kv.set(RECENTS_KEY, next);
+  }
+
+  /** The host the Doc Review page browses when the user has not picked one. */
+  async function defaultHostId(): Promise<string> {
+    const local = await files.localHostId();
+    if (local) return local;
+    const hosts = await bb.sdk.hosts.list();
+    const host = hosts.find((candidate) => candidate.status === "connected") ?? hosts[0];
+    if (!host) throw new Error("No host is available to browse.");
+    return host.id;
   }
 
   bb.http.route("GET", PAGE_ROUTE, async (context) => {
@@ -89,14 +152,14 @@ export default async function plugin(bb: BbPluginApi) {
     const wanted = context.req.query("v") ?? "";
     const n = Number.parseInt(context.req.query("n") ?? "", 10);
     const doc = store.getDoc(docId);
-    if (!doc || doc.kind === "md" || !Number.isInteger(n) || n < 1) {
+    if (!doc || !isPaged(doc.kind) || !Number.isInteger(n) || n < 1) {
       return context.text("Not found", 404);
     }
     try {
       const version = await currentVersion(doc);
       // A stale URL means the file changed: the panel refetches its page list.
       if (version !== wanted) return context.text("Stale page", 404);
-      const pdf = await pdfFor(doc, version);
+      const pdf = await pdfFor(doc);
       const image = await renderer.pageImage(doc.id, version, pdf, n);
       const bytes = await readFile(image);
       return new Response(new Uint8Array(bytes), {
@@ -118,9 +181,9 @@ export default async function plugin(bb: BbPluginApi) {
   ): Promise<Map<string, Buffer>> {
     const images = new Map<string, Buffer>();
     const areas = comments.filter((comment) => comment.anchor.kind === "page-area");
-    if (areas.length === 0 || doc.kind === "md") return images;
+    if (areas.length === 0 || !isPaged(doc.kind)) return images;
     const version = await currentVersion(doc);
-    const pdf = await pdfFor(doc, version);
+    const pdf = await pdfFor(doc);
     const sizes = await renderer.pageSizes(doc.id, version, pdf);
     for (const comment of areas) {
       const anchor = comment.anchor;
@@ -160,12 +223,16 @@ export default async function plugin(bb: BbPluginApi) {
   }
 
   bb.rpc.register(rpcContract, {
-    async "doc.open"({ path: rawPath, source }) {
+    async "doc.open"({ path: rawPath, source, remember }) {
       const kind = docKindFor(rawPath);
-      if (!kind) throw new Error("Doc Review opens .md, .pdf, and .pptx files.");
+      if (!kind) {
+        throw new Error("Doc Review opens Markdown, PDF, Word, PowerPoint, and Excel files.");
+      }
       const { absPath, hostId } = await files.resolve(rawPath, source);
       const doc = store.upsertDoc(hostId, absPath, kind);
-      return { doc: toDto(doc, await currentVersion(doc)) };
+      const dto = toDto(doc, await currentVersion(doc));
+      if (remember) await rememberDocument(doc);
+      return { doc: dto };
     },
 
     async "doc.get"({ docId }) {
@@ -205,11 +272,20 @@ export default async function plugin(bb: BbPluginApi) {
     async "doc.pages"({ docId }) {
       const doc = requireDoc(docId);
       const version = await currentVersion(doc);
-      const pdf = await pdfFor(doc, version);
+      let pdf: string;
+      try {
+        pdf = await pdfFor(doc);
+      } catch (error) {
+        if (error instanceof NeedsLibreOfficeError) {
+          return { status: "needs-libreoffice" as const, ...error.missing, platform: serverPlatform() };
+        }
+        throw error;
+      }
       const sizes = await renderer.pageSizes(doc.id, version, pdf);
       const base = `/api/v1/plugins/${bb.pluginId}/http${PAGE_ROUTE}`;
       const v = encodeURIComponent(version);
       return {
+        status: "ready" as const,
         version,
         pages: sizes.map((size, index) => ({
           n: index + 1,
@@ -224,9 +300,79 @@ export default async function plugin(bb: BbPluginApi) {
       const doc = requireDoc(docId);
       const current = await currentVersion(doc);
       if (current !== version) throw new Error("The file changed; reload it.");
-      const pdf = await pdfFor(doc, current);
+      const pdf = await pdfFor(doc);
       const page = await renderer.pageText(doc.id, current, pdf, n);
       return { n, lines: page.lines };
+    },
+
+    async "doc.links"({ docId }) {
+      const doc = requireDoc(docId);
+      const download = await viewer.mintLink(located(doc));
+      if (doc.kind === "pdf") return { document: download, download };
+      if (doc.kind === "text" || doc.kind === "presentation") {
+        try {
+          return { document: await viewer.mintLink({ absPath: await pdfFor(doc), hostId: null }), download };
+        } catch (error) {
+          if (error instanceof NeedsLibreOfficeError) return { document: null, download };
+          throw error;
+        }
+      }
+      return { document: null, download };
+    },
+
+    async "sheet.open"({ docId, locale }) {
+      const doc = requireDoc(docId);
+      if (doc.kind !== "spreadsheet") throw new Error("Not a spreadsheet.");
+      const version = await currentVersion(doc);
+      return await viewer.withWorkbook(located(doc), normalizeLocale(locale), async (reader) => ({
+        version,
+        workbook: reader.summary,
+        sheet: await reader.readSheet(reader.summary.activeSheet),
+        fidelity: reader.fidelity,
+      }));
+    },
+
+    async "sheet.read"({ docId, index, locale }) {
+      const doc = requireDoc(docId);
+      return await viewer.withWorkbook(located(doc), normalizeLocale(locale), async (reader) => {
+        if (index >= reader.summary.sheets.length) throw new Error("This workbook has no such sheet.");
+        return { sheet: await reader.readSheet(index) };
+      });
+    },
+
+    async hosts() {
+      const hosts = await bb.sdk.hosts.list();
+      return { hosts: hosts.map((host) => ({ id: host.id, name: host.name, status: host.status })) };
+    },
+
+    async browse({ hostId, path: directory }) {
+      const targetHost = hostId ?? (await defaultHostId());
+      const listing = await bb.sdk.hosts.directory({
+        hostId: targetHost,
+        ...(directory ? { path: directory } : {}),
+      });
+      const openable = (name: string) =>
+        isSupportedPath(name) ||
+        (MARKDOWN_EXTENSIONS as readonly string[]).some((extension) => name.toLowerCase().endsWith(`.${extension}`));
+      return {
+        hostId: targetHost,
+        directory: listing.directory,
+        parent: listing.parent,
+        entries: listing.entries
+          .filter((entry) => entry.kind === "directory" || openable(entry.name))
+          .sort((left, right) =>
+            left.kind !== right.kind ? (left.kind === "directory" ? -1 : 1) : left.name.localeCompare(right.name),
+          ),
+      };
+    },
+
+    async recents() {
+      return { recents: await readRecents() };
+    },
+
+    async "recents.clear"() {
+      await bb.storage.kv.set(RECENTS_KEY, []);
+      return { recents: [] };
     },
 
     async "comments.list"({ docId }) {

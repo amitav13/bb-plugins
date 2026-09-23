@@ -1,7 +1,7 @@
 // Where a document lives and how to read it. Files on the bb server's own
 // machine are read from disk; files on other machines go through bb.sdk.files
 // and, for rendering, are copied into the plugin's cache.
-import { readFile, stat, mkdir, writeFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
@@ -55,15 +55,30 @@ export class DocFiles {
     source: OpenerSource,
   ): Promise<{ absPath: string; hostId: string | null }> {
     if (source.kind === "workspace") {
-      if (!source.environmentId) throw new Error("This workspace file has no environment.");
-      const environment = await this.bb.sdk.environments.get({
-        environmentId: source.environmentId,
-      });
-      if (!environment.path) throw new Error("This environment has no checkout on disk yet.");
-      return {
-        absPath: joinPath(environment.path, rawPath),
-        hostId: await this.canonicalHost(environment.hostId),
-      };
+      if (source.environmentId) {
+        const environment = await this.bb.sdk.environments.get({
+          environmentId: source.environmentId,
+        });
+        if (!environment.path) throw new Error("This environment has no checkout on disk yet.");
+        return {
+          absPath: joinPath(environment.path, rawPath),
+          hostId: await this.canonicalHost(environment.hostId),
+        };
+      }
+      // A project's own checkout, opened outside any thread.
+      if (source.projectId) {
+        const project = await this.bb.sdk.projects.get({ projectId: source.projectId });
+        const checkout =
+          project.sources.find((candidate) => candidate.hostId === source.experimental_hostId) ??
+          project.sources.find((candidate) => candidate.isDefault) ??
+          project.sources[0];
+        if (!checkout) throw new Error("This project has no checkout on any host.");
+        return {
+          absPath: joinPath(checkout.path, rawPath),
+          hostId: await this.canonicalHost(checkout.hostId),
+        };
+      }
+      throw new Error("This workspace file has no environment.");
     }
     if (source.kind === "thread-storage") {
       if (!source.threadId) throw new Error("This stored file has no thread.");
@@ -114,20 +129,6 @@ export class DocFiles {
     return file.contentEncoding === "base64"
       ? Buffer.from(file.content, "base64").toString("utf8")
       : file.content;
-  }
-
-  /** A readable local path for the document's bytes (a cached copy for remote hosts). */
-  async localPath(doc: DocRow, version: string): Promise<string> {
-    if (doc.hostId === null) return doc.absPath;
-    const file = await this.bb.sdk.files.read({ hostId: doc.hostId, path: doc.absPath });
-    const dir = path.join(this.cacheRoot, "remote", doc.id);
-    await mkdir(dir, { recursive: true });
-    const target = path.join(dir, `${version.replace(/[^a-z0-9-]/gi, "")}${path.extname(doc.absPath)}`);
-    await writeFile(
-      target,
-      file.contentEncoding === "base64" ? Buffer.from(file.content, "base64") : file.content,
-    );
-    return target;
   }
 
   /**
