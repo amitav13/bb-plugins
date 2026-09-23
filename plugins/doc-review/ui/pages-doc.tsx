@@ -24,6 +24,7 @@ import {
   type ReviewComment,
 } from "../src/types";
 import type { Point } from "./markdown-doc";
+import { isCommentShortcut, SelectionMenu } from "./selection-menu";
 import { errorText, useReviewRpc } from "./use-review";
 
 export type PageMode = "text" | "area";
@@ -429,30 +430,18 @@ export function PagesDoc({
   }, []);
 
   // Text selections: read the selected words from the word layer.
-  const readSelection = useCallback(() => {
+  const computeSelection = useCallback((): (LiveSelection & { point: Point; anchor: Anchor }) | null => {
     const element = root.current;
     const selection = window.getSelection();
-    if (!element || !selection || selection.rangeCount === 0 || selection.isCollapsed) {
-      setLive(null);
-      setButton(null);
-      return;
-    }
+    if (!element || !selection || selection.rangeCount === 0 || selection.isCollapsed) return null;
     const range = selection.getRangeAt(0);
-    if (!element.contains(range.commonAncestorContainer)) {
-      setLive(null);
-      setButton(null);
-      return;
-    }
+    if (!element.contains(range.commonAncestorContainer)) return null;
     const startNode = range.startContainer;
     const startElement = startNode instanceof Element ? startNode : startNode.parentElement;
     const pageElement = startElement?.closest<HTMLElement>("[data-page]");
     const n = Number(pageElement?.dataset.page);
     const lines = texts.get(n);
-    if (!pageElement || !lines) {
-      setLive(null);
-      setButton(null);
-      return;
-    }
+    if (!pageElement || !lines) return null;
     const spans = pageElement.querySelectorAll<HTMLElement>("[data-textlayer] > span");
     const picked = new Map<number, PageWord[]>();
     for (const span of spans) {
@@ -462,21 +451,66 @@ export function PagesDoc({
       if (!word) continue;
       picked.set(li, [...(picked.get(li) ?? []), word]);
     }
-    if (picked.size === 0) {
-      setLive(null);
-      setButton(null);
-      return;
-    }
+    if (picked.size === 0) return null;
     const ordered = [...picked.entries()].sort(([a], [b]) => a - b);
     const rects = ordered.map(([, words]) => unionRect(words));
     const quote = ordered.map(([, words]) => words.map((word) => word[4]).join(" ")).join("\n");
     const last = rects[rects.length - 1]!;
-    setLive({ page: n, rects, quote });
-    setButton({
+    return {
+      page: n,
+      rects,
+      quote,
       point: toRoot(pageElement, last.x + last.w, last.y + last.h),
       anchor: { kind: "page-text", page: n, quote: quote.slice(0, 4000), rects: rects.slice(0, 200) },
-    });
+    };
   }, [texts, toRoot]);
+
+  const readSelection = useCallback(() => {
+    const candidate = computeSelection();
+    setLive(candidate ? { page: candidate.page, rects: candidate.rects, quote: candidate.quote } : null);
+    setButton(candidate ? { point: candidate.point, anchor: candidate.anchor } : null);
+  }, [computeSelection]);
+
+  const commentOn = useCallback(
+    (anchor: Anchor, point: Point) => {
+      setButton(null);
+      setLive(null);
+      window.getSelection()?.removeAllRanges();
+      onRequestComment(anchor, point);
+    },
+    [onRequestComment],
+  );
+
+  // Right-click on selected words offers Comment; elsewhere the usual menu stays.
+  const [menu, setMenu] = useState<{ top: number; left: number; anchor: Anchor; quote: string } | null>(null);
+  const closeMenu = useCallback(() => setMenu(null), []);
+  const onContextMenu = (event: ReactMouseEvent<HTMLDivElement>) => {
+    if (mode !== "text") return;
+    const candidate = computeSelection();
+    const element = root.current;
+    if (!candidate || !element) return;
+    event.preventDefault();
+    const box = element.getBoundingClientRect();
+    setMenu({
+      top: event.clientY - box.top,
+      left: Math.min(event.clientX - box.left, box.width - 190),
+      anchor: candidate.anchor,
+      quote: candidate.quote,
+    });
+  };
+
+  // Cmd+Option+M comments on the current selection.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (!isCommentShortcut(event) || mode !== "text") return;
+      const candidate = computeSelection();
+      if (!candidate) return;
+      event.preventDefault();
+      commentOn(candidate.anchor, candidate.point);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [computeSelection, commentOn, mode]);
 
   useEffect(() => {
     let timer = 0;
@@ -535,7 +569,17 @@ export function PagesDoc({
         "doc-review-pages relative mx-auto flex w-full max-w-5xl flex-col gap-4 px-4 py-4",
         mode === "area" && "select-none",
       )}
+      onContextMenu={onContextMenu}
     >
+      {menu ? (
+        <SelectionMenu
+          top={menu.top}
+          left={menu.left}
+          quote={menu.quote}
+          onClose={closeMenu}
+          onComment={() => commentOn(menu.anchor, { top: menu.top + 4, left: menu.left })}
+        />
+      ) : null}
       {pages.map((page) => (
         <PageView
           key={`${version}:${page.n}`}
@@ -561,11 +605,7 @@ export function PagesDoc({
           onMouseDown={(event) => event.preventDefault()}
           onClick={(event) => {
             event.stopPropagation();
-            const { anchor, point } = button;
-            setButton(null);
-            setLive(null);
-            window.getSelection()?.removeAllRanges();
-            onRequestComment(anchor, point);
+            commentOn(button.anchor, button.point);
           }}
         >
           <Icon name="MessageSquarePlus" className="size-3.5" />

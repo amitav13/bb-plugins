@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-doc-review",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Comment on Markdown, PDF, and PPTX files in a panel tab, then hand every comment to an agent in one message — in the current chat or a new one.",
   "license": "MIT",
   "author": "Foma",

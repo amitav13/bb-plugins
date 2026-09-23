@@ -32,6 +32,7 @@ import {
 } from "@/lib/links";
 import { messageOf, refreshProjects, useProjects, type Rpc } from "@/lib/store";
 import { cn } from "@/lib/utils";
+import { RouteCard } from "./RouteCard";
 
 /** The dashed box bb's own list pages use for loading and empty states. */
 function EmptyState({ children }: { children: ReactNode }) {
@@ -395,6 +396,8 @@ export function ProjectsPage(_props: PluginNavPanelProps) {
             cookies in Settings → Browser.
           </p>
         </div>
+
+        <RouteCard rpc={rpc} />
 
         <AddForm rpc={rpc} />
 

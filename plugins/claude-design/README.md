@@ -74,6 +74,29 @@ bb's browser keeps its own cookies. Sign in to claude.ai there once, or import
 your sign-ins from Chrome (or another installed browser) in
 **Settings → Browser → Browsers**.
 
+## Using Claude Design without a VPN
+
+bb's browser runs on your Mac, so claude.ai sees the Mac's address and may
+refuse your country. The **Use Claude Design without a VPN** card on the
+Claude Design page sends only Claude's domains through the bb server instead:
+
+- a login item (launchd) keeps an SSH tunnel to the server open: a SOCKS proxy
+  on `127.0.0.1:39891` for Claude's traffic, and a forward on `127.0.0.1:39892`
+  through which the Mac reads the routing rule;
+- the plugin serves that rule (a PAC file at `/api/v1/plugins/claude-design/http/proxy.pac`):
+  `claude.ai`, `claude.com`, `anthropic.com`, `claudeusercontent.com`,
+  `claudemcpcontent.com`, `claude.site`, and `challenges.cloudflare.com` go
+  through the tunnel, everything else stays direct;
+- macOS network services point at the rule as their automatic proxy
+  configuration. A service that already uses a different automatic proxy (a
+  corporate one, for example) is skipped.
+
+Enter the SSH login you use from the Mac (`user@host`), copy the command, and
+paste it into Terminal once; it asks for the Mac password to change the
+network setting. The card shows when a Mac last read the rule. The **Undo**
+command removes the login item and turns the setting off again. Safari,
+Chrome, and the Claude apps on that Mac use the same route.
+
 ## Linking and the default project
 
 Each saved Claude Design project can be linked to one bb project. A bb project

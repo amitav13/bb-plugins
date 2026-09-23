@@ -29,6 +29,14 @@ import {
   projectUrl,
 } from "./lib/links";
 import {
+  PAC_ROUTE,
+  ROUTED_DOMAINS,
+  installCommand,
+  isSshTarget,
+  pacScript,
+  uninstallCommand,
+} from "./lib/route";
+import {
   ProjectListError,
   defaultFor,
   findProject,
@@ -60,6 +68,27 @@ interface BbProjectInfo {
 }
 
 export default async function plugin(bb: BbPluginApi) {
+  const settings = bb.settings.define({
+    sshTarget: {
+      type: "string",
+      label: "SSH login to this server from your Mac (user@host), used by the no-VPN setup",
+      default: "",
+    },
+  });
+
+  // The routing rule a Mac fetches through its SSH tunnel (see lib/route.ts).
+  // It holds no secret: it only names Claude's domains and a local port.
+  let lastPacFetchAt: number | null = null;
+  bb.http.route("GET", PAC_ROUTE, () => {
+    lastPacFetchAt = Date.now();
+    return new Response(pacScript(), {
+      headers: {
+        "content-type": "application/x-ns-proxy-autoconfig; charset=utf-8",
+        "cache-control": "no-cache",
+      },
+    });
+  });
+
   async function readList(): Promise<StoredProject[]> {
     const raw = await bb.storage.kv.get<unknown>(STORAGE_KEY);
     if (!Array.isArray(raw)) return [];
@@ -252,6 +281,27 @@ export default async function plugin(bb: BbPluginApi) {
   // hands their message to the page, which shows it as is.
   bb.rpc.register(rpcContract, {
     list: async () => ({ projects: await listViews() }),
+    route_info: async () => {
+      const { sshTarget } = await settings.get();
+      const target = sshTarget && isSshTarget(sshTarget) ? sshTarget : null;
+      const serverPort = Number(new URL(bb.server.loopbackBaseUrl).port || 80);
+      return {
+        target,
+        installCommand: target
+          ? installCommand({ target, serverPort, pluginId: bb.pluginId })
+          : null,
+        uninstallCommand: uninstallCommand(bb.pluginId),
+        domains: [...ROUTED_DOMAINS],
+        lastPacFetchAt,
+      };
+    },
+    route_set_target: async ({ target }) => {
+      if (target && !isSshTarget(target)) {
+        throw new Error("Use the SSH login you use from the Mac, like coder@203.0.113.7.");
+      }
+      await settings.experimental_set({ sshTarget: target });
+      return { target: target || null };
+    },
     bb_projects: async () => {
       const projects = await bb.sdk.projects.list();
       return {

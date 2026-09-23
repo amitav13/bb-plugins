@@ -18,6 +18,7 @@ import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 import type { Anchor, ReviewComment } from "../src/types";
 import { narrowLines, rewriteImages, splitBlocks, type MdBlock } from "./md-blocks";
+import { isCommentShortcut, SelectionMenu } from "./selection-menu";
 import {
   clearHighlights,
   contextAround,
@@ -28,6 +29,12 @@ import {
 export interface Point {
   top: number;
   left: number;
+}
+
+interface SelectionCandidate {
+  anchor: Anchor;
+  point: Point;
+  range: Range;
 }
 
 interface Pin {
@@ -102,9 +109,7 @@ export function MarkdownDoc({
   }, [content, assetBaseUrl]);
   const sourceLines = useMemo(() => content.replace(/\r\n?/g, "\n").split("\n"), [content]);
 
-  const [selection, setSelection] = useState<{ anchor: Anchor; point: Point; range: Range } | null>(
-    null,
-  );
+  const [selection, setSelection] = useState<SelectionCandidate | null>(null);
   const [pins, setPins] = useState<Pin[]>([]);
   const [layoutTick, setLayoutTick] = useState(0);
   const ranges = useRef(new Map<string, Range>());
@@ -197,25 +202,17 @@ export function MarkdownDoc({
     }
   }, [scrollRequest]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const readSelection = useCallback(() => {
+  /** The comment a selection inside this view would create, or null. */
+  const computeSelection = useCallback((): SelectionCandidate | null => {
     const element = root.current;
     const current = window.getSelection();
-    if (!element || !current || current.rangeCount === 0 || current.isCollapsed) {
-      setSelection(null);
-      return;
-    }
+    if (!element || !current || current.rangeCount === 0 || current.isCollapsed) return null;
     const range = current.getRangeAt(0);
-    if (!element.contains(range.commonAncestorContainer)) {
-      setSelection(null);
-      return;
-    }
+    if (!element.contains(range.commonAncestorContainer)) return null;
     const quote = range.toString().trim();
     const startBlock = closestBlock(range.startContainer);
     const endBlock = closestBlock(range.endContainer);
-    if (!quote || !startBlock || !endBlock) {
-      setSelection(null);
-      return;
-    }
+    if (!quote || !startBlock || !endBlock) return null;
     const lines = narrowLines(
       sourceLines,
       { start: Number(startBlock.dataset.start), end: Number(endBlock.dataset.end) },
@@ -225,7 +222,7 @@ export function MarkdownDoc({
     const rects = range.getClientRects();
     const last = rects[rects.length - 1] ?? range.getBoundingClientRect();
     const box = element.getBoundingClientRect();
-    setSelection({
+    return {
       anchor: {
         kind: "md-text",
         quote: quote.slice(0, 4000),
@@ -239,8 +236,42 @@ export function MarkdownDoc({
         left: Math.min(Math.max(last.right - box.left - 40, 8), box.width - 140),
       },
       range: range.cloneRange(),
-    });
+    };
   }, [sourceLines]);
+
+  const readSelection = useCallback(() => setSelection(computeSelection()), [computeSelection]);
+
+  // Right-click on a selection offers Comment; elsewhere the usual menu stays.
+  const [menu, setMenu] = useState<{ top: number; left: number; candidate: SelectionCandidate } | null>(
+    null,
+  );
+  const closeMenu = useCallback(() => setMenu(null), []);
+  const onContextMenu = (event: ReactMouseEvent<HTMLDivElement>) => {
+    const candidate = computeSelection();
+    const element = root.current;
+    if (!candidate || !element) return;
+    event.preventDefault();
+    const box = element.getBoundingClientRect();
+    setMenu({
+      top: event.clientY - box.top,
+      left: Math.min(event.clientX - box.left, box.width - 190),
+      candidate,
+    });
+  };
+
+  // Cmd+Option+M comments on the current selection.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (!isCommentShortcut(event)) return;
+      const candidate = computeSelection();
+      if (!candidate) return;
+      event.preventDefault();
+      setSelection(null);
+      onRequestComment(candidate.anchor, candidate.point, candidate.range);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [computeSelection, onRequestComment]);
 
   // Mouse, keyboard, and touch selections all end up in selectionchange.
   useEffect(() => {
@@ -275,7 +306,24 @@ export function MarkdownDoc({
   };
 
   return (
-    <div ref={root} className="doc-review-md relative mx-auto w-full max-w-3xl py-5 pl-10 pr-5" onClick={onClick}>
+    <div
+      ref={root}
+      className="doc-review-md relative mx-auto w-full max-w-3xl py-5 pl-10 pr-5"
+      onClick={onClick}
+      onContextMenu={onContextMenu}
+    >
+      {menu ? (
+        <SelectionMenu
+          top={menu.top}
+          left={menu.left}
+          quote={menu.candidate.anchor.kind === "md-text" ? menu.candidate.anchor.quote : ""}
+          onClose={closeMenu}
+          onComment={() => {
+            setSelection(null);
+            onRequestComment(menu.candidate.anchor, { top: menu.top + 4, left: menu.left }, menu.candidate.range);
+          }}
+        />
+      ) : null}
       {blocks.length === 0 ? (
         <p className="text-sm text-muted-foreground">This file is empty.</p>
       ) : (

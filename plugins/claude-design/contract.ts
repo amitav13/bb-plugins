@@ -94,4 +94,22 @@ export const rpcContract = defineRpcContract({
       .strict(),
     output: contextSchema,
   },
+  /** How to send Claude's traffic from the Mac through this server. */
+  route_info: {
+    input: z.null(),
+    output: z
+      .object({
+        target: z.string().nullable(),
+        installCommand: z.string().nullable(),
+        uninstallCommand: z.string(),
+        domains: z.array(z.string()),
+        /** Last time a Mac fetched the routing rule through its tunnel. */
+        lastPacFetchAt: z.number().nullable(),
+      })
+      .strict(),
+  },
+  route_set_target: {
+    input: z.object({ target: z.string().trim().max(255) }).strict(),
+    output: z.object({ target: z.string().nullable() }).strict(),
+  },
 });

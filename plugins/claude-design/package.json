@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-claude-design",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "Claude Design inside bb: project links, bb's browser beside the chat, and Send to Claude comments handed to an agent.",
   "license": "MIT",
