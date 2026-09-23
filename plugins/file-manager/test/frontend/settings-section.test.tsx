@@ -121,7 +121,7 @@ function stateWith(startFolder: string) {
     preferences: PREFERENCES,
     chunkSizeBytes: CHUNK_BYTES,
     maxListEntries: 5000,
-    archiveSupport: { zip: true, tar: true, sevenZip: false },
+    archiveSupport: { zip: true, tar: true, sevenZip: false, rar: false },
     pluginVersion: "0.3.0",
     primaryHostId: HOST_ID,
   };
