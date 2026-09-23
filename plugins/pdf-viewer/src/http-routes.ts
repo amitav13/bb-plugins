@@ -1,6 +1,6 @@
-// The byte route behind the viewer: streams one registered document, with
-// range support so a browser's PDF viewer can jump to a page without pulling
-// the whole file first.
+// The byte route behind the viewer: streams one registered file — a PDF to
+// read or an original to download — with range support so a browser's PDF
+// viewer can jump to a page without pulling the whole file first.
 import { createReadStream } from "node:fs";
 import { Readable } from "node:stream";
 import type { Context } from "hono";
@@ -45,11 +45,12 @@ export function handleDocumentRequest(
   }
 
   const headers = new Headers({
-    "content-type": "application/pdf",
+    "content-type": document.contentType,
     "content-disposition": contentDisposition(document.name),
     "accept-ranges": "bytes",
-    // The server's compress() middleware also runs for plugin routes; PDFs are
-    // already compressed, and no-transform keeps content-length intact.
+    // The server's compress() middleware also runs for plugin routes; PDFs and
+    // Office files are already compressed, and no-transform keeps
+    // content-length intact.
     "cache-control": "private, no-store, no-transform",
     "x-content-type-options": "nosniff",
   });

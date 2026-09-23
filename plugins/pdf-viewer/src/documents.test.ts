@@ -47,11 +47,19 @@ describe("contentDisposition", () => {
     expect(contentDisposition("Документ.pdf")).toContain(
       'filename="document.pdf"',
     );
+    expect(contentDisposition("Отчёт.docx")).toContain(
+      'filename="document.docx"',
+    );
   });
 });
 
 describe("DocumentRegistry", () => {
-  const document = { path: "/tmp/a.pdf", name: "a.pdf", sizeBytes: 10 };
+  const document = {
+    path: "/tmp/a.pdf",
+    name: "a.pdf",
+    sizeBytes: 10,
+    contentType: "application/pdf",
+  };
 
   it("resolves a registered document by its id", () => {
     const registry = new DocumentRegistry({ ttlMs: 1000, now: () => 0 });
@@ -73,5 +81,17 @@ describe("DocumentRegistry", () => {
     now = 3001;
     registry.register(document);
     expect(registry.size).toBe(1);
+  });
+
+  it("keeps a link alive while it is being read", () => {
+    let now = 0;
+    const registry = new DocumentRegistry({ ttlMs: 1000, now: () => now });
+    const { id } = registry.register(document);
+    now = 900;
+    expect(registry.resolve(id)?.contentType).toBe("application/pdf");
+    now = 1800;
+    expect(registry.resolve(id)).not.toBeNull();
+    now = 2801;
+    expect(registry.resolve(id)).toBeNull();
   });
 });

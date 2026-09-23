@@ -9,6 +9,8 @@ export interface RegisteredDocument {
   path: string;
   name: string;
   sizeBytes: number;
+  /** Sent as Content-Type; the route never guesses from the name. */
+  contentType: string;
   expiresAtMs: number;
 }
 
@@ -23,7 +25,12 @@ export class DocumentRegistry {
   }
 
   /** Registers one document and returns the opaque id its URL carries. */
-  register(document: { path: string; name: string; sizeBytes: number }): {
+  register(document: {
+    path: string;
+    name: string;
+    sizeBytes: number;
+    contentType: string;
+  }): {
     id: string;
     expiresAtMs: number;
   } {
@@ -34,14 +41,20 @@ export class DocumentRegistry {
     return { id, expiresAtMs };
   }
 
-  /** The document for an id, or null when it is unknown or expired. */
+  /**
+   * The document for an id, or null when it is unknown or expired. A hit
+   * extends the lease: a viewer still fetching page ranges of a long
+   * document keeps its link alive, and an abandoned one lapses on schedule.
+   */
   resolve(id: string): RegisteredDocument | null {
     const document = this.#documents.get(id);
     if (!document) return null;
-    if (document.expiresAtMs <= this.#now()) {
+    const now = this.#now();
+    if (document.expiresAtMs <= now) {
       this.#documents.delete(id);
       return null;
     }
+    document.expiresAtMs = Math.max(document.expiresAtMs, now + this.#ttlMs);
     return document;
   }
 
@@ -78,7 +91,8 @@ export function contentDisposition(fileName: string): string {
   // A fully non-ASCII name leaves nothing useful behind ("Документ.pdf" would
   // become ".pdf"), so fall back rather than emit a bare extension.
   const stem = ascii.replace(/\.[^.]*$/, "");
-  const fallback = /[A-Za-z0-9]/.test(stem) ? ascii : "document.pdf";
+  const extension = /\.([A-Za-z0-9]{1,8})$/.exec(ascii)?.[1] ?? "pdf";
+  const fallback = /[A-Za-z0-9]/.test(stem) ? ascii : `document.${extension}`;
   const encoded = encodeURIComponent(fileName).replaceAll("'", "%27");
   return `inline; filename="${fallback}"; filename*=UTF-8''${encoded}`;
 }

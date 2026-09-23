@@ -3,19 +3,10 @@ import { describe, expect, it } from "vitest";
 import {
   baseName,
   directoryName,
-  isPdfPath,
   joinPath,
+  pdfNameFor,
   previewUrlFor,
 } from "./pdf-paths";
-
-describe("isPdfPath", () => {
-  it("matches the extension case-insensitively", () => {
-    expect(isPdfPath("/a/b.pdf")).toBe(true);
-    expect(isPdfPath("REPORT.PDF")).toBe(true);
-    expect(isPdfPath("/a/b.pdf.txt")).toBe(false);
-    expect(isPdfPath("/a/pdf")).toBe(false);
-  });
-});
 
 describe("baseName / directoryName", () => {
   it("splits an absolute path", () => {
@@ -46,5 +37,22 @@ describe("previewUrlFor", () => {
     expect(previewUrlFor("/api/previews/abc/", "a b.pdf")).toBe(
       "/api/previews/abc/a%20b.pdf",
     );
+  });
+});
+
+describe("pdfNameFor", () => {
+  it("keeps the stem and swaps the extension", () => {
+    expect(pdfNameFor("Отчёт Q3.docx")).toBe("Отчёт Q3.pdf");
+    expect(pdfNameFor("deck.v2.pptx")).toBe("deck.v2.pdf");
+    expect(pdfNameFor("README")).toBe("README.pdf");
+  });
+
+  it("drops separators and control characters", () => {
+    expect(pdfNameFor("a/b\\c\u0001.doc")).toBe("abc.pdf");
+    expect(pdfNameFor(".docx")).toBe("document.pdf");
+  });
+
+  it("caps a very long name", () => {
+    expect(pdfNameFor(`${"я".repeat(300)}.docx`)).toBe(`${"я".repeat(120)}.pdf`);
   });
 });

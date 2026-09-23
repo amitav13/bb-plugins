@@ -1,11 +1,6 @@
 // Pure path helpers shared by the backend. Kept free of the plugin API so
 // they can be unit-tested without a bb server.
 
-/** True when the path ends in a PDF extension (case-insensitive). */
-export function isPdfPath(path: string): boolean {
-  return /\.pdf$/i.test(path);
-}
-
 /** The last segment of a POSIX-ish path, or the path itself when it has none. */
 export function baseName(path: string): string {
   const normalized = path.replace(/[\\/]+$/, "");
@@ -41,4 +36,23 @@ export function joinPath(root: string, relative: string): string {
  */
 export function previewUrlFor(baseUrl: string, fileName: string): string {
   return `${baseUrl.replace(/\/+$/, "")}/${encodeURIComponent(fileName)}`;
+}
+
+/**
+ * The name a converted document keeps: "Отчёт Q3.docx" → "Отчёт Q3.pdf".
+ * Safe as one path segment and short enough for any file system.
+ */
+export function pdfNameFor(originalName: string): string {
+  const stem = originalName.replace(/\.[^.]*$/, "");
+  const safe = [...stem]
+    .filter((character) => {
+      const code = character.codePointAt(0) ?? 0;
+      return (
+        code >= 0x20 && code !== 0x7f && character !== "/" && character !== "\\"
+      );
+    })
+    .join("")
+    .trim()
+    .slice(0, 120);
+  return `${safe || "document"}.pdf`;
 }
