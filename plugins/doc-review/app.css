@@ -1,0 +1,28 @@
+/* Highlights for commented text in the Markdown view (CSS Custom Highlight API). */
+::highlight(doc-review-comment) {
+  background-color: color-mix(in oklab, var(--color-primary, var(--primary)) 20%, transparent);
+}
+::highlight(doc-review-active) {
+  background-color: color-mix(in oklab, var(--color-primary, var(--primary)) 38%, transparent);
+}
+::highlight(doc-review-pending) {
+  background-color: color-mix(in oklab, var(--color-primary, var(--primary)) 30%, transparent);
+}
+
+/* Blocks are rendered one by one; keep the spacing of a single document. */
+.doc-review-md .doc-review-block + .doc-review-block {
+  margin-top: 0.75rem;
+}
+
+/* The invisible word layer over page images: selectable, never painted. */
+.doc-review-textlayer > span {
+  position: absolute;
+  color: transparent;
+  white-space: pre;
+  line-height: 1;
+  overflow: hidden;
+  cursor: text;
+}
+.doc-review-textlayer > span::selection {
+  background: transparent;
+}

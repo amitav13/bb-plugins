@@ -4,8 +4,16 @@
   "name": "xminor-bb-plugins",
   "plugins": [
     {
+      "name": "claude-design",
+      "source": "./plugins/claude-design"
+    },
+    {
       "name": "context-compact",
       "source": "./plugins/context-compact"
+    },
+    {
+      "name": "doc-review",
+      "source": "./plugins/doc-review"
     },
     {
       "name": "file-manager",
