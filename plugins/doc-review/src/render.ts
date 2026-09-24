@@ -8,17 +8,34 @@ import { createHash } from "node:crypto";
 import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseBboxLayout, type BboxPage } from "./bbox.js";
-import type { Rect } from "./types.js";
+import { PAGE_WIDTHS, type Rect } from "./types.js";
 
 export interface PageSize {
   width: number;
   height: number;
 }
 
-/** Rendered page width in pixels: sharp on a retina panel, small enough to stream. */
-const PAGE_PIXEL_WIDTH = 1600;
+/** Rendered page width in pixels when the panel does not ask for one. */
+const DEFAULT_PAGE_WIDTH = 1600;
+/** The largest page image, in pixels: enough to read an A1 sheet zoomed in. */
+const MAX_PAGE_PIXELS = 16_000_000;
+/** Page renders running at once; the rest wait, newest first. */
+const RENDER_SLOTS = 3;
 const RENDER_TIMEOUT_MS = 60_000;
 const VERSIONS_KEPT = 2;
+
+/**
+ * The width to render a page at for a requested width: the next step in
+ * PAGE_WIDTHS, cut to the pixel budget so a huge or zoomed page stays bounded.
+ */
+export function renderWidth(size: PageSize, requested: number | null): number {
+  const step =
+    requested !== null && Number.isFinite(requested) && requested > 0
+      ? (PAGE_WIDTHS.find((width) => width >= requested) ?? PAGE_WIDTHS[PAGE_WIDTHS.length - 1]!)
+      : DEFAULT_PAGE_WIDTH;
+  const budget = Math.floor(Math.sqrt((MAX_PAGE_PIXELS * size.width) / Math.max(size.height, 1)));
+  return Math.max(16, Math.min(step, budget));
+}
 
 export class ToolMissingError extends Error {}
 
@@ -66,6 +83,8 @@ async function exists(file: string): Promise<boolean> {
 export class Renderer {
   /** Deduplicates concurrent work that produces the same file. */
   private readonly inFlight = new Map<string, Promise<unknown>>();
+  private rendering = 0;
+  private readonly waiting: Array<() => void> = [];
 
   constructor(private readonly root: string) {}
 
@@ -80,6 +99,24 @@ export class Renderer {
     const promise = work().finally(() => this.inFlight.delete(key));
     this.inFlight.set(key, promise);
     return promise;
+  }
+
+  /**
+   * Runs a page render when a slot is free. Waiting renders start newest
+   * first: while someone scrolls through a long document, the pages they
+   * stopped at come before the ones they flew past.
+   */
+  private async inSlot<T>(work: () => Promise<T>): Promise<T> {
+    if (this.rendering >= RENDER_SLOTS) {
+      await new Promise<void>((resolve) => this.waiting.push(resolve));
+    }
+    this.rendering += 1;
+    try {
+      return await work();
+    } finally {
+      this.rendering -= 1;
+      this.waiting.pop()?.();
+    }
   }
 
   /** Drops cached versions of a document except the newest few. */
@@ -150,35 +187,43 @@ export class Renderer {
     });
   }
 
-  /** Renders one page to PNG once per version; returns the image path. */
-  async pageImage(docId: string, version: string, pdfPath: string, n: number): Promise<string> {
+  /** Renders one page to PNG at a width once per version; returns the image path. */
+  async pageImage(
+    docId: string,
+    version: string,
+    pdfPath: string,
+    n: number,
+    width: number = DEFAULT_PAGE_WIDTH,
+  ): Promise<string> {
     const dir = this.versionDir(docId, version);
-    const target = path.join(dir, `page-${n}.png`);
+    const target = path.join(dir, `page-${n}-${width}.png`);
     if (await exists(target)) return target;
-    return this.once(target, async () => {
-      await mkdir(dir, { recursive: true });
-      const prefix = path.join(dir, `render-${n}-${process.pid}`);
-      await run(
-        "pdftoppm",
-        [
-          "-png",
-          "-f",
-          String(n),
-          "-l",
-          String(n),
-          "-singlefile",
-          "-scale-to-x",
-          String(PAGE_PIXEL_WIDTH),
-          "-scale-to-y",
-          "-1",
-          pdfPath,
-          prefix,
-        ],
-        { timeoutMs: RENDER_TIMEOUT_MS },
-      );
-      await rename(`${prefix}.png`, target);
-      return target;
-    });
+    return this.once(target, () =>
+      this.inSlot(async () => {
+        await mkdir(dir, { recursive: true });
+        const prefix = path.join(dir, `render-${n}-${width}-${process.pid}`);
+        await run(
+          "pdftoppm",
+          [
+            "-png",
+            "-f",
+            String(n),
+            "-l",
+            String(n),
+            "-singlefile",
+            "-scale-to-x",
+            String(width),
+            "-scale-to-y",
+            "-1",
+            pdfPath,
+            prefix,
+          ],
+          { timeoutMs: RENDER_TIMEOUT_MS },
+        );
+        await rename(`${prefix}.png`, target);
+        return target;
+      }),
+    );
   }
 
   /** Word boxes for one page, cached as JSON. */

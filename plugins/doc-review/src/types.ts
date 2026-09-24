@@ -103,6 +103,19 @@ export interface PageInfo {
   url: string;
 }
 
+/**
+ * Widths, in pixels, a page image is rendered at. The panel asks for the
+ * smallest one that covers the page at its zoom on the screen's pixel density.
+ */
+export const PAGE_WIDTHS = [600, 900, 1200, 1600, 2400, 3200, 4800, 6400] as const;
+
+/** The rendered width to ask for when a page shows `cssWidth` CSS pixels wide. */
+export function pageImageWidth(cssWidth: number, pixelRatio: number): number {
+  const wanted = cssWidth * Math.max(1, pixelRatio);
+  // A tenth of slack keeps a page just past a step on the smaller image.
+  return PAGE_WIDTHS.find((width) => width >= wanted * 0.9) ?? PAGE_WIDTHS[PAGE_WIDTHS.length - 1]!;
+}
+
 /** One word with its box normalized to the page: [x0, y0, x1, y1, text]. */
 export type PageWord = [number, number, number, number, string];
 

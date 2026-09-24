@@ -44,6 +44,10 @@ import { errorText, useComments, useReviewDoc, useReviewRpc } from "./use-review
 
 /** Below this panel width the comment list becomes a bottom sheet. */
 const WIDE_MIN_PX = 760;
+/** Below this width the toolbar drops its labels (a phone, a thin panel). */
+const COMPACT_MAX_PX = 560;
+/** How much of the view the comment sheet covers on a narrow panel. */
+const SHEET_SHARE = 0.55;
 
 function Centered({ children }: { children: ReactNode }) {
   return (
@@ -144,11 +148,13 @@ function SendMenu({
   count,
   canSendHere,
   busy,
+  compact,
   onSend,
 }: {
   count: number;
   canSendHere: boolean;
   busy: boolean;
+  compact: boolean;
   onSend: (target: "thread" | "new") => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -181,7 +187,7 @@ function SendMenu({
         aria-label={primary === "thread" ? "Send the drafts to this chat" : "Start a new chat with the drafts"}
       >
         {busy ? <Icon name="Loading" className="size-3.5 animate-spin" /> : <Icon name="Sent" className="size-3.5" />}
-        {primary === "thread" ? "Send to chat" : "Send to new chat"}
+        {compact ? "Send" : primary === "thread" ? "Send to chat" : "Send to new chat"}
         {count > 0 ? <span className="tabular-nums opacity-80">{count}</span> : null}
       </Button>
       <Button
@@ -245,7 +251,12 @@ export function Workspace({
   const instanceId = useId();
   const root = useRef<HTMLDivElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
-  const wide = useWidth(root) >= WIDE_MIN_PX;
+  const [overlay, setOverlay] = useState<HTMLDivElement | null>(null);
+  const width = useWidth(root);
+  const wide = width >= WIDE_MIN_PX;
+  const compact = width > 0 && width < COMPACT_MAX_PX;
+  // Phones have no built-in PDF viewer worth switching to.
+  const [touchOnly] = useState(() => window.matchMedia?.("(hover: none) and (pointer: coarse)").matches ?? false);
 
   const { comments, error: commentsError, refetch, setComments } = useComments(doc.id);
   const { content, error: contentError, onStale, retry } = useDocContent(doc);
@@ -253,7 +264,7 @@ export function Workspace({
   const paged = isPaged(doc.kind);
   // The classic view is the browser's own PDF viewer: search, zoom, print.
   const [classic, setClassic] = useState(false);
-  const showClassic = classic && paged && Boolean(links?.document);
+  const showClassic = classic && paged && !touchOnly && Boolean(links?.document);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [scrollRequest, setScrollRequest] = useState(0);
   const [pending, setPending] = useState<{ anchor: Anchor; point: Point; range: Range | null } | null>(
@@ -266,6 +277,7 @@ export function Workspace({
   const [listOpen, setListOpen] = useState(false);
 
   const list = comments ?? [];
+  const coveredBottom = !wide && listOpen ? SHEET_SHARE : 0;
   const drafts = list.filter((comment) => comment.status === "draft");
   const needsYou = list.filter((comment) => comment.status === "replied").length;
 
@@ -479,6 +491,7 @@ export function Workspace({
       activeId={activeId}
       scrollRequest={scrollRequest}
       scroller={scroller}
+      coveredBottom={coveredBottom}
       pendingRange={pending?.range ?? null}
       composer={composer}
       composerPoint={pending?.point ?? null}
@@ -497,6 +510,8 @@ export function Workspace({
       activeId={activeId}
       scrollRequest={scrollRequest}
       scroller={scroller}
+      overlay={overlay}
+      coveredBottom={coveredBottom}
       pendingAnchor={pending?.anchor ?? null}
       composer={composer}
       composerPoint={pending?.point ?? null}
@@ -510,7 +525,7 @@ export function Workspace({
   const ownScroll = content?.kind === "sheet" || showClassic;
   return (
     <div ref={root} className="relative flex h-full min-h-0 flex-col bg-background">
-      <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
+      <div className={cn("flex shrink-0 items-center border-b border-border py-2", compact ? "gap-1 px-2" : "gap-2 px-3")}>
         {hasPages ? (
           <div className="flex rounded-md border border-border p-0.5" role="group" aria-label="Selection mode">
             {(["text", "area"] as const).map((value) => (
@@ -526,16 +541,20 @@ export function Workspace({
                 )}
               >
                 <Icon name={value === "text" ? "TextWrap" : "Square"} className="size-3.5" />
-                {value === "text" ? "Text" : "Area"}
+                {compact ? <span className="sr-only">{value === "text" ? "Text" : "Area"}</span> : value === "text" ? "Text" : "Area"}
               </button>
             ))}
           </div>
         ) : null}
         <div className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-          {needsYou > 0 ? `${needsYou} answered · ` : ""}
-          {list.length === 0 ? "No comments yet" : `${list.length} comment${list.length === 1 ? "" : "s"}`}
+          {compact ? null : (
+            <>
+              {needsYou > 0 ? `${needsYou} answered · ` : ""}
+              {list.length === 0 ? "No comments yet" : `${list.length} comment${list.length === 1 ? "" : "s"}`}
+            </>
+          )}
         </div>
-        {paged && links?.document ? (
+        {paged && !touchOnly && links?.document ? (
           <Button
             type="button"
             variant={showClassic ? "secondary" : "ghost"}
@@ -545,8 +564,8 @@ export function Workspace({
             aria-label={showClassic ? "Back to commenting" : "Classic view: search, zoom, print"}
             onClick={() => setClassic((value) => !value)}
           >
-            <Icon name={showClassic ? "MessageSquare" : "ZoomIn"} className="size-4" />
-            {showClassic ? "Comment" : "Classic"}
+            <Icon name={showClassic ? "MessageSquare" : "Eye"} className="size-4" />
+            {compact ? null : showClassic ? "Comment" : "Classic"}
           </Button>
         ) : null}
         {doc.kind === "md" && onShowOriginal ? (
@@ -573,24 +592,40 @@ export function Workspace({
             type="button"
             variant={listOpen ? "secondary" : "ghost"}
             size="sm"
-            className="h-8 px-2"
+            className="relative h-8 px-2"
             aria-pressed={listOpen}
+            aria-label={needsYou > 0 ? `Comments, ${needsYou} answered` : "Comments"}
             onClick={() => setListOpen((value) => !value)}
           >
             <Icon name="MessageSquare" className="size-4" />
             <span className="tabular-nums">{list.length}</span>
+            {needsYou > 0 ? (
+              <span className="absolute right-1 top-1 size-2 rounded-full bg-primary" aria-hidden />
+            ) : null}
           </Button>
         )}
         <SendMenu
           count={drafts.length}
           canSendHere={Boolean(threadId)}
           busy={sending}
+          compact={compact}
           onSend={(target) => void send(target)}
         />
       </div>
       <div className="flex min-h-0 flex-1">
-        <div ref={scroller} className={cn("relative min-w-0 flex-1", ownScroll ? "overflow-hidden" : "overflow-auto")}>
-          {body}
+        <div className="relative flex min-w-0 flex-1">
+          <div
+            ref={scroller}
+            className={cn(
+              "relative min-w-0 flex-1",
+              ownScroll ? "overflow-hidden" : "overflow-auto",
+              // Pages zoom by pinching inside the view, not the whole app.
+              hasPages && "overscroll-x-contain [scrollbar-gutter:stable] [touch-action:pan-x_pan-y]",
+            )}
+          >
+            {body}
+          </div>
+          <div ref={setOverlay} className="pointer-events-none absolute inset-0 z-30" />
         </div>
         {wide ? (
           <aside className="w-80 shrink-0 overflow-y-auto border-l border-border bg-background">
@@ -599,7 +634,7 @@ export function Workspace({
         ) : null}
       </div>
       {!wide && listOpen ? (
-        <div className="absolute inset-x-0 bottom-0 z-40 max-h-[65%] overflow-y-auto rounded-t-xl border-t border-border bg-background shadow-2xl">
+        <div className="absolute inset-x-0 bottom-0 z-40 max-h-[55%] overflow-y-auto overscroll-contain rounded-t-xl border-t border-border bg-background pb-[env(safe-area-inset-bottom)] shadow-2xl">
           <div className="sticky top-0 z-10 flex items-center justify-between border-b border-border bg-background px-3 py-1.5">
             <span className="text-xs font-medium">Comments</span>
             <Button

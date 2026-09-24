@@ -78,6 +78,7 @@ export function MarkdownDoc({
   activeId,
   scrollRequest,
   scroller,
+  coveredBottom,
   pendingRange,
   composer,
   composerPoint,
@@ -93,6 +94,8 @@ export function MarkdownDoc({
   /** Changes when the list asks to scroll to the active comment. */
   scrollRequest: number;
   scroller: RefObject<HTMLElement | null>;
+  /** Share of the view's height covered from below (the comment sheet on a phone). */
+  coveredBottom: number;
   pendingRange: Range | null;
   composer: ReactNode;
   composerPoint: Point | null;
@@ -194,10 +197,12 @@ export function MarkdownDoc({
     if (!range || !container) return;
     const rect = range.getBoundingClientRect();
     const box = container.getBoundingClientRect();
-    if (rect.top < box.top + 40 || rect.bottom > box.bottom - 40) {
+    const visible = box.height * (1 - coveredBottom);
+    if (rect.top < box.top + 40 || rect.bottom > box.top + visible - 40) {
       container.scrollTo({
-        top: container.scrollTop + rect.top - box.top - box.height / 3,
-        behavior: "smooth",
+        top: container.scrollTop + rect.top - box.top - visible / 3,
+        // Under the comment sheet the list scrolls too, which would cut a smooth scroll short.
+        behavior: coveredBottom > 0 ? "auto" : "smooth",
       });
     }
   }, [scrollRequest]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -239,7 +244,15 @@ export function MarkdownDoc({
     };
   }, [sourceLines]);
 
-  const readSelection = useCallback(() => setSelection(computeSelection()), [computeSelection]);
+  const hideButton = useRef(0);
+  const readSelection = useCallback(() => {
+    const next = computeSelection();
+    window.clearTimeout(hideButton.current);
+    if (next) setSelection(next);
+    // A tap on the button can clear the selection before the tap lands.
+    else hideButton.current = window.setTimeout(() => setSelection(null), 350);
+  }, [computeSelection]);
+  useEffect(() => () => window.clearTimeout(hideButton.current), []);
 
   // Right-click on a selection offers Comment; elsewhere the usual menu stays.
   const [menu, setMenu] = useState<{ top: number; left: number; candidate: SelectionCandidate } | null>(
@@ -305,10 +318,16 @@ export function MarkdownDoc({
     }
   };
 
+  // Under the comment sheet, room below the text lets its last lines scroll into view.
+  const covered = coveredBottom > 0 ? Math.round((scroller.current?.clientHeight ?? 0) * coveredBottom) : 0;
+
   return (
     <div
       ref={root}
+      // While text is selected here, a sideways drag is not bb's sidebar swipe.
+      data-sidebar-swipe-selectable=""
       className="doc-review-md relative mx-auto w-full max-w-3xl py-5 pl-10 pr-5"
+      style={covered > 0 ? { paddingBottom: covered + 20 } : undefined}
       onClick={onClick}
       onContextMenu={onContextMenu}
     >

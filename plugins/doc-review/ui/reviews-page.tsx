@@ -82,8 +82,10 @@ function FileRow({ path, title, detail, onOpen }: { path: string; title: string;
       <span className="min-w-0 flex-1">
         <span className="block truncate text-sm">{title}</span>
         <span className="block truncate text-xs text-muted-foreground">{path}</span>
+        {/* On a narrow page the status goes under the path, so the name keeps its room. */}
+        {detail ? <span className="block text-xs text-muted-foreground @lg:hidden">{detail}</span> : null}
       </span>
-      {detail ? <span className="shrink-0 text-xs text-muted-foreground">{detail}</span> : null}
+      {detail ? <span className="hidden shrink-0 text-xs text-muted-foreground @lg:block">{detail}</span> : null}
     </button>
   );
 }
@@ -158,7 +160,7 @@ function DocList() {
     : [];
 
   return (
-    <div className="h-full min-h-0 flex-1 overflow-y-auto">
+    <div className="@container h-full min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto box-border w-full max-w-3xl space-y-5 px-4 pb-6 pt-3 md:px-5 md:pt-4">
         <p className="text-sm text-muted-foreground">
           Read Markdown, PDF, Word, PowerPoint, and Excel files and comment on them. Files opened

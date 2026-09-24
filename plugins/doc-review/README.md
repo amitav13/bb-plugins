@@ -21,9 +21,21 @@ PowerPoint, and Excel rendering and its classic PDF view live here now.
 
 Any matching file opened in bb — a link in a message, the file picker,
 `bb thread open` — renders in a panel tab. On pages, **Classic** switches to
-the browser's own PDF viewer (search, zoom, print); the download button saves
-the original file. Conversions are cached per file version, so a document
+the browser's own PDF viewer (search, print); the download button saves the
+original file. Conversions are cached per file version, so a document
 converts once and reopens at once.
+
+## Reading pages
+
+- **Zoom:** the bar in the corner (100% fits the width), Ctrl or Cmd with
+  the scroll wheel, or a pinch on a trackpad or touch screen. The zoom stays
+  anchored where you point, and pages re-render at the resolution it needs.
+- **Wide pages:** every page shares one scale, so a landscape sheet, an A1
+  drawing, or a wide chart is wider than the panel and scrolls sideways,
+  while narrower pages stay centered. A page more than 2.5 times the typical
+  width is scaled down to that.
+- **Long documents:** only pages near the screen load their image and text.
+  The page counter in the bar shows where you are; tap it to jump to a page.
 
 ## Commenting
 
@@ -31,8 +43,12 @@ converts once and reopens at once.
 - **Area:** on pages and slides, switch to **Area** and draw a box around a
   chart or picture; the comment carries an image of that region.
 - **Cells:** in a workbook, click a cell or drag over a range, then comment on
-  it; commented cells show their number in the corner.
+  it; commented cells show a mark in the corner.
 - **Whole document:** one button at the top of the comment list.
+- **On a touch screen:** select text with a long press; in **Area** mode hold,
+  then drag to draw a box (a hold without a drag marks the spot); in a
+  workbook tap a cell, or hold and drag over a range. A drag without the hold
+  scrolls as usual.
 
 Comments stay as drafts until you press **Send to chat** (this chat) or pick
 **To a new chat** (same project, model, and workspace, fresh context). The
@@ -103,9 +119,15 @@ bb doc-review reply <id> --note "question or reason"
   hosts, mints links for the classic view and downloads (bb's preview
   transport, or a ranged stream for large local files), and reads workbooks
   into grid models (`src/spreadsheet`).
-- `src/render.ts` renders PDF pages to PNG with `pdftoppm` on first view and
-  takes word boxes from `pdftotext -bbox-layout` for an invisible, selectable
-  text layer.
+- `src/render.ts` renders PDF pages to PNG with `pdftoppm` on first view, at
+  a width from a fixed set of steps that the panel picks for its zoom and
+  pixel density (within a 16-megapixel budget), three at a time with the
+  newest request first. Word boxes come from `pdftotext -bbox-layout` for an
+  invisible, selectable text layer.
+- `ui/page-layout.ts` places pages at one scale and keeps the reading place
+  across zooms and resizes; `ui/pages-doc.tsx` mounts only the pages near the
+  viewport and fetches their images with cancellation, so flicking through a
+  long document does not queue hundreds of renders.
 - Markdown is split into top-level blocks (`marked` lexer) and rendered with
   bb's `Markdown` component, so a selection maps back to source lines.
   Highlights use the CSS Custom Highlight API.
@@ -125,6 +147,8 @@ bb doc-review reply <id> --note "question or reason"
 - A PDF without its source can be commented on, but the agent can only answer
   those comments, not rebuild the PDF.
 - In the classic view, comments are not shown; switch back with **Comment**.
+  Phones have no usable built-in PDF viewer, so the button is hidden there.
+- A text selection that spans two pages keeps the part on the first page.
 
 ## Development
 

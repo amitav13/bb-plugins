@@ -29,6 +29,15 @@ export function CommentEditor({
     if (!element) return;
     element.focus({ preventScroll: true });
     element.setSelectionRange(element.value.length, element.value.length);
+    // On a phone the keyboard shrinks the view; keep the field above it.
+    const reveal = () => element.scrollIntoView({ block: "nearest", inline: "nearest" });
+    const viewport = window.visualViewport;
+    viewport?.addEventListener("resize", reveal);
+    const timer = window.setTimeout(reveal, 50);
+    return () => {
+      viewport?.removeEventListener("resize", reveal);
+      window.clearTimeout(timer);
+    };
   }, []);
 
   // Grow with the text up to a comfortable height.
@@ -72,7 +81,7 @@ export function CommentEditor({
         rows={2}
         placeholder="What should change here?"
         aria-label="Comment"
-        className="block w-full resize-none rounded-md border border-input bg-background px-2 py-1.5 text-sm outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+        className="block w-full resize-none rounded-md border border-input bg-background px-2 py-1.5 text-base outline-none md:text-sm placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
       />
       <div className="mt-2 flex items-center justify-between gap-2">
         <span className="hidden text-xs text-muted-foreground sm:inline">⌘↵ to save</span>

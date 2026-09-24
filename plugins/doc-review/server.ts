@@ -15,7 +15,7 @@ import { rpcContract, type RecentDocument } from "./src/contract.js";
 import { reviewCli } from "./src/cli.js";
 import { DocFiles } from "./src/files.js";
 import { buildHandoffMessage } from "./src/message.js";
-import { Renderer, type PageSize } from "./src/render.js";
+import { Renderer, renderWidth, type PageSize } from "./src/render.js";
 import { MIGRATIONS, ReviewStore, type Db, type DocRow } from "./src/store.js";
 import {
   docKindFor,
@@ -151,6 +151,7 @@ export default async function plugin(bb: BbPluginApi) {
     const docId = context.req.query("doc") ?? "";
     const wanted = context.req.query("v") ?? "";
     const n = Number.parseInt(context.req.query("n") ?? "", 10);
+    const requested = Number.parseInt(context.req.query("w") ?? "", 10);
     const doc = store.getDoc(docId);
     if (!doc || !isPaged(doc.kind) || !Number.isInteger(n) || n < 1) {
       return context.text("Not found", 404);
@@ -160,7 +161,10 @@ export default async function plugin(bb: BbPluginApi) {
       // A stale URL means the file changed: the panel refetches its page list.
       if (version !== wanted) return context.text("Stale page", 404);
       const pdf = await pdfFor(doc);
-      const image = await renderer.pageImage(doc.id, version, pdf, n);
+      const size = (await renderer.pageSizes(doc.id, version, pdf))[n - 1];
+      if (!size) return context.text("Not found", 404);
+      const width = renderWidth(size, Number.isFinite(requested) ? requested : null);
+      const image = await renderer.pageImage(doc.id, version, pdf, n, width);
       const bytes = await readFile(image);
       return new Response(new Uint8Array(bytes), {
         headers: {

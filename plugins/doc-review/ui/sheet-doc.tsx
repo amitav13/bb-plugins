@@ -1,7 +1,8 @@
 // Spreadsheet view: the workbook grid (components/spreadsheet, from the former
 // Document Viewer), plus cell comments. Click or drag over cells to select a
-// cell or a range, then comment on it; commented cells carry their number in
-// the corner. The grid renders rows lazily while scrolling, so selection and
+// cell or a range, then comment on it; commented cells carry a mark in the
+// corner. On a touch screen a tap picks a cell and a drag scrolls; resting a
+// finger on a cell first makes the drag select a range. The grid renders rows lazily while scrolling, so selection and
 // comment marks are painted as data attributes on the cells that exist and
 // repainted whenever rows mount.
 import {
@@ -24,6 +25,8 @@ import { errorText, useReviewRpc } from "./use-review";
 
 /** Sheets kept in the browser; each can hold up to 100k cells. */
 const KEPT_SHEETS = 6;
+/** How long a finger rests on a cell before a drag selects a range instead of scrolling. */
+const HOLD_MS = 300;
 
 interface CellRange {
   r1: number;
@@ -129,6 +132,29 @@ export function SheetDoc({
   const [button, setButton] = useState<Point | null>(null);
   const [menu, setMenu] = useState<{ top: number; left: number } | null>(null);
   const drag = useRef<{ start: { r: number; c: number }; moved: boolean } | null>(null);
+  const hold = useRef<{ timer: number; x: number; y: number; cell: NonNullable<ReturnType<typeof cellAt>> } | null>(
+    null,
+  );
+  /** A finger is dragging over cells: the grid must not scroll under it. */
+  const touchDrag = useRef(false);
+
+  const cancelHold = useCallback(() => {
+    if (hold.current) window.clearTimeout(hold.current.timer);
+    hold.current = null;
+  }, []);
+
+  useEffect(() => {
+    const element = root.current;
+    if (!element) return;
+    const onTouchMove = (event: TouchEvent) => {
+      if (touchDrag.current) event.preventDefault();
+    };
+    element.addEventListener("touchmove", onTouchMove, { passive: false });
+    return () => {
+      element.removeEventListener("touchmove", onTouchMove);
+      cancelHold();
+    };
+  }, [cancelHold]);
 
   const onSelectSheet = useCallback(
     (index: number) => {
@@ -244,7 +270,7 @@ export function SheetDoc({
     const box = element.getBoundingClientRect();
     return {
       top: Math.min(bottom - box.top + 6, box.height - 40),
-      left: Math.min(Math.max(right - box.left - 60, 8), box.width - 140),
+      left: Math.max(8, Math.min(right - box.left - 60, box.width - 180)),
     };
   }, []);
 
@@ -271,12 +297,31 @@ export function SheetDoc({
     if (event.button !== 0 || composer) return;
     const cell = cellAt(event.target);
     if (!cell) return;
+    if (event.pointerType === "touch") {
+      cancelHold();
+      const timer = window.setTimeout(() => {
+        hold.current = null;
+        touchDrag.current = true;
+        drag.current = { start: { r: cell.r, c: cell.c }, moved: false };
+        setSelection(normalize({ r: cell.r, c: cell.c }, { r: cell.r2, c: cell.c2 }));
+        setButton(null);
+        navigator.vibrate?.(10);
+      }, HOLD_MS);
+      hold.current = { timer, x: event.clientX, y: event.clientY, cell };
+      return;
+    }
     const start = event.shiftKey && selection ? { r: selection.r1, c: selection.c1 } : { r: cell.r, c: cell.c };
     drag.current = { start, moved: false };
     setSelection(normalize(start, { r: cell.r2, c: cell.c2 }));
     setButton(null);
   };
   const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const pending = hold.current;
+    if (pending) {
+      // Moving before the hold ends is a scroll.
+      if (Math.hypot(event.clientX - pending.x, event.clientY - pending.y) > 8) cancelHold();
+      return;
+    }
     const current = drag.current;
     if (!current || (event.buttons & 1) === 0) return;
     const cell = cellAt(document.elementFromPoint(event.clientX, event.clientY));
@@ -285,6 +330,19 @@ export function SheetDoc({
     setSelection(normalize(current.start, { r: cell.r2, c: cell.c2 }));
   };
   const onPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const pending = hold.current;
+    if (pending) {
+      // A tap picks the cell, and opens its comment when it has one.
+      cancelHold();
+      const { cell } = pending;
+      const range = normalize({ r: cell.r, c: cell.c }, { r: cell.r2, c: cell.c2 });
+      setSelection(range);
+      const hit = sheetComments.find(({ range: commented }) => inRange(commented, cell.r, cell.c));
+      if (hit) onSelectComment(hit.comment.id);
+      setButton(pointFor(range));
+      return;
+    }
+    touchDrag.current = false;
     const current = drag.current;
     drag.current = null;
     if (!current) return;
@@ -354,10 +412,18 @@ export function SheetDoc({
   return (
     <div
       ref={root}
+      // Sideways drags belong to the grid, not to bb's sidebar and panel swipes.
+      data-no-sidebar-swipe=""
+      data-no-secondary-panel-swipe=""
       className="doc-review-sheet relative flex h-full min-h-0 flex-col"
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
+      onPointerCancel={() => {
+        cancelHold();
+        touchDrag.current = false;
+        drag.current = null;
+      }}
       onContextMenu={onContextMenu}
     >
       <SpreadsheetView
@@ -380,7 +446,7 @@ export function SheetDoc({
       {button && selection && !composer ? (
         <button
           type="button"
-          className="absolute z-40 inline-flex items-center gap-1.5 rounded-md border border-border bg-popover px-2.5 py-1 text-xs font-medium text-popover-foreground shadow-md hover:bg-accent"
+          className="absolute z-40 inline-flex items-center gap-1.5 whitespace-nowrap rounded-md border border-border bg-popover px-2.5 py-1 text-xs font-medium text-popover-foreground shadow-md hover:bg-accent"
           style={{ top: button.top, left: button.left }}
           onPointerDown={(event) => event.stopPropagation()}
           onPointerUp={(event) => event.stopPropagation()}
