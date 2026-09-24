@@ -69,6 +69,11 @@ export function SettingsSection(_props: PluginSettingsSectionProps) {
    * copy in this section wrong until it is re-read.
    */
   const rawRestoreLastFolder = hostSettings?.restoreLastFolder;
+  /**
+   * The third: with `openThreadWorkspace` on, a thread's tab skips both folders
+   * and the copy below says so — which it can only do after a re-read.
+   */
+  const rawOpenThreadWorkspace = hostSettings?.openThreadWorkspace;
 
   const [state, setState] = useState<PanelState | null>(null);
   /**
@@ -162,6 +167,13 @@ export function SettingsSection(_props: PluginSettingsSectionProps) {
     lastRawRestoreRef.current = rawRestoreLastFolder;
     if (isExternalBooleanSettingChange(previous, rawRestoreLastFolder)) refresh();
   }, [rawRestoreLastFolder, refresh]);
+
+  const lastRawThreadFolderRef = useRef<string | number | boolean | undefined>(undefined);
+  useEffect(() => {
+    const previous = lastRawThreadFolderRef.current;
+    lastRawThreadFolderRef.current = rawOpenThreadWorkspace;
+    if (isExternalBooleanSettingChange(previous, rawOpenThreadWorkspace)) refresh();
+  }, [rawOpenThreadWorkspace, refresh]);
 
   // Coming back to the page refreshes too: a broadcast can be missed while the
   // socket is down, and a start folder can stop existing (deleted, renamed)

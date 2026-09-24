@@ -833,6 +833,56 @@ describe("SettingsSection — which folder actually opens (§2.2)", () => {
     });
     expect(callsTo(slot, "getState")).toHaveLength(2);
   });
+
+  it("names the thread-folder toggle while it is on", async () => {
+    const slot = await mountSection(
+      baseRpc({
+        getState: () => ({
+          ...stateWith(WORK),
+          preferences: { ...PREFERENCES, openThreadWorkspace: true },
+        }),
+      }),
+    );
+
+    expect(slot.getByTestId("fm-settings-open-rule").textContent).toBe(
+      "Reopening the last folder is on, so this is where the panel opens the first time " +
+        "and whenever the last folder is gone. Opening the thread's project folder is on, " +
+        "so a File Manager tab inside a thread starts in that thread's folder instead. " +
+        `Everything stays inside ${ROOT}.`,
+    );
+  });
+
+  it("re-reads when the host delivers a flipped thread-folder checkbox", async () => {
+    const settings: Record<string, string | boolean> = {
+      startFolder: WORK,
+      restoreLastFolder: true,
+      openThreadWorkspace: false,
+    };
+    let threadFolder = false;
+    const slot = await mountSection(
+      baseRpc({
+        getState: () => ({
+          ...stateWith(WORK),
+          preferences: { ...PREFERENCES, openThreadWorkspace: threadFolder },
+        }),
+      }),
+      settings,
+    );
+    expect(slot.getByTestId("fm-settings-open-rule").textContent).not.toContain(
+      "project folder",
+    );
+
+    threadFolder = true;
+    settings.openThreadWorkspace = true;
+    slot.lifecycle.rerender(createElement(section.component, {}));
+
+    await waitFor(() => {
+      expect(slot.getByTestId("fm-settings-open-rule").textContent).toContain(
+        "starts in that thread's folder instead",
+      );
+    });
+    expect(callsTo(slot, "getState")).toHaveLength(2);
+  });
 });
 
 describe("SettingsSection — forgetting the remembered folder (§1.9)", () => {
