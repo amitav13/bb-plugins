@@ -82,12 +82,13 @@ export class DocFiles {
     }
     if (source.kind === "thread-storage") {
       if (!source.threadId) throw new Error("This stored file has no thread.");
-      const storage = await this.bb.sdk.threads.storagePaths({
-        threadId: source.threadId,
-        includeFiles: "false",
-        includeDirectories: "false",
-      });
-      return { absPath: joinPath(storage.storageRootPath, rawPath), hostId: null };
+      // storageLocation names the root and its host without listing entries
+      // (storagePaths refuses a request that asks for no entries).
+      const storage = await this.bb.sdk.threads.storageLocation({ threadId: source.threadId });
+      return {
+        absPath: joinPath(storage.storageRootPath, rawPath),
+        hostId: await this.canonicalHost(storage.hostId),
+      };
     }
     // "~/…" is a convenience for paths typed on the Doc Review page.
     if (rawPath === "~" || rawPath.startsWith("~/")) rawPath = path.posix.join(homedir(), rawPath.slice(1));
