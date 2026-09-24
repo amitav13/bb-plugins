@@ -6,11 +6,23 @@
 // *question*, not a claim. `readTextFile` answers it from the bytes, which is
 // the only way `Makefile`, `LICENSE`, `.gitignore` and `dockerfile` ever open,
 // and the only honest answer for the extension nobody has heard of yet.
+//
+// The one exception to "the name only picks a transport" is an archive
+// (§8.13): its bytes are never text, and what is worth showing is its table
+// of contents — so an entry the listing already marked with `archiveFormat`
+// gets `archive`, and its contents come from `listArchive` instead.
 import type { FileEntry } from "../contract";
 import { isImageName } from "./preview";
 
 /** How the viewer will try to show a file. */
-export type ViewerKind = "image" | "pdf" | "video" | "audio" | "markdown" | "text";
+export type ViewerKind =
+  | "image"
+  | "pdf"
+  | "video"
+  | "audio"
+  | "markdown"
+  | "text"
+  | "archive";
 
 /**
  * Video containers a browser plays without a plugin.
@@ -52,6 +64,20 @@ export function viewerKindFor(name: string): ViewerKind {
   if (AUDIO_EXTENSIONS.has(extension)) return "audio";
   if (MARKDOWN_EXTENSIONS.has(extension)) return "markdown";
   return "text";
+}
+
+/**
+ * The renderer for a listed entry: `archive` when the listing marked it as
+ * one (the same test that drives its icon and its Extract… row), otherwise
+ * whatever its name says.
+ */
+export function viewerKindForEntry(entry: FileEntry): ViewerKind {
+  return entry.archiveFormat !== null ? "archive" : viewerKindFor(entry.name);
+}
+
+/** True for the kinds read as a string through `readTextFile`. */
+export function isTextViewerKind(kind: ViewerKind): boolean {
+  return kind === "text" || kind === "markdown";
 }
 
 /** True for the kinds shown from a `createPreviewUrl` URL rather than a string. */

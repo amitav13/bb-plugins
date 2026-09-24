@@ -149,7 +149,7 @@ function baseRpc(
       preferences: PREFERENCES,
       chunkSizeBytes: 4 * MIB,
       maxListEntries: 5000,
-      archiveSupport: { zip: true, tar: true, sevenZip: false },
+      archiveSupport: { zip: true, tar: true, sevenZip: false, rar: false },
       pluginVersion: "0.1.0",
       primaryHostId: HOST_ID,
     }),

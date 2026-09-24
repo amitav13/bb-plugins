@@ -25,6 +25,7 @@ export type FileManagerHandlers = PluginRpcHandlers<FileManagerContract>;
 export type TransferHandlers = Pick<
   FileManagerHandlers,
   | "extractArchive"
+  | "listArchive"
   | "jobStatus"
   | "jobCancel"
   | "uploadCreate"
@@ -38,6 +39,7 @@ export interface ArchiveSupport {
   zip: boolean;
   tar: boolean;
   sevenZip: boolean;
+  rar: boolean;
 }
 
 export interface RpcDeps {

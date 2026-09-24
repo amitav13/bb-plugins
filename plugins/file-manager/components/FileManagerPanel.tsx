@@ -138,7 +138,7 @@ type BatchResult = RpcOutput<"moveEntries">;
 /** Private drag flavour; `text/plain` carries the same paths as a fallback. */
 const DRAG_MIME = "application/x-bb-file-manager";
 
-const DEFAULT_ARCHIVE_SUPPORT = { zip: false, tar: false, sevenZip: false };
+const DEFAULT_ARCHIVE_SUPPORT = { zip: false, tar: false, sevenZip: false, rar: false };
 
 /** Stable empty list, so the list view never re-memoises on a fresh `[]`. */
 const NO_ENTRIES: readonly FileEntry[] = [];
@@ -318,6 +318,12 @@ interface PendingReveal {
    * Declaring "it is not here" against it would be wrong (§5.3).
    */
   since: ListDirResult | null;
+  /**
+   * Open the Extract dialog for the entry once it is selected (§8.13): the
+   * file opener's "Extract…" arrives here, so the extraction runs through
+   * the panel's own dialog, job and tray rather than one of its own.
+   */
+  extract: boolean;
 }
 
 function isTypingTarget(target: EventTarget | null): boolean {
@@ -366,6 +372,12 @@ export interface FileManagerSurfaceProps {
   initialPath?: string | null;
   /** Absolute path of an entry to select once its folder is listed (§5.3). */
   revealPath?: string | null;
+  /**
+   * Also open the Extract dialog for `revealPath` once it is selected — the
+   * file opener's "Extract…" for an archive link (§8.13). Ignored for a
+   * reveal that is not an archive.
+   */
+  extractOnReveal?: boolean;
   /** Seed for the in-folder filter; the compact chrome unfolds for it. */
   initialQuery?: string;
   /**
@@ -384,6 +396,7 @@ export function FileManagerSurface({
   chrome,
   initialPath = null,
   revealPath = null,
+  extractOnReveal = false,
   initialQuery = "",
   threadId = null,
 }: FileManagerSurfaceProps) {
@@ -923,8 +936,14 @@ export function FileManagerSurface({
       since = directoryDataRef.current;
       toast.message(`Showing hidden files so ${name} is visible.`);
     }
-    setPendingReveal({ path: revealPath, dir: dirname(revealPath), name, since });
-  }, [revealPath, state]);
+    setPendingReveal({
+      path: revealPath,
+      dir: dirname(revealPath),
+      name,
+      since,
+      extract: extractOnReveal,
+    });
+  }, [extractOnReveal, revealPath, state]);
 
   /**
    * The path bar's "reveal this file" (§5.3). It cannot select the row before
@@ -938,6 +957,8 @@ export function FileManagerSurface({
     if (visiblePaths.includes(pending.path)) {
       setPendingReveal(null);
       selectionRef.current.select(pending.path);
+      const entry = pending.extract ? entryByPath.get(pending.path) : undefined;
+      if (entry !== undefined && entry.archiveFormat !== null) setDialog({ kind: "extract", entry });
       return;
     }
     const data = directory.data;
@@ -956,6 +977,7 @@ export function FileManagerSurface({
     directory.data,
     directory.isLoading,
     directory.isRefetching,
+    entryByPath,
     pendingReveal,
     state,
     visiblePaths,
@@ -1212,7 +1234,7 @@ export function FileManagerSurface({
           // Same rule for a file: revealing a row in the folder already on
           // screen is a selection, not a navigation.
           if (!isSamePath(dir, currentPathRef.current)) navigateTo(dir);
-          setPendingReveal({ path: entry.path, dir, name: entry.name, since });
+          setPendingReveal({ path: entry.path, dir, name: entry.name, since, extract: false });
           closePathBar(true);
         } catch (failure) {
           if (pathTicketRef.current !== ticket) return;
@@ -2703,6 +2725,9 @@ export function FileManagerSurface({
           onOpenChange={(open) => {
             if (!open) setDialog({ kind: "none" });
           }}
+          // An archive's "Extract…" swaps the viewer for the ordinary dialog:
+          // one extraction flow, whichever surface it starts from (§8.13).
+          onExtract={(entry) => setDialog({ kind: "extract", entry })}
         />
       ) : null}
 

@@ -21,6 +21,11 @@
 // Markdown renders through bb's own `Markdown`, and every other text through
 // bb's `experimental_SourceCode`, so a file looks here exactly like it looks
 // in a thread — same theme, same highlighting, one implementation.
+//
+// An archive is the third case (§8.13): neither a URL nor a string, but its
+// table of contents, drawn by components/ArchiveContents.tsx from
+// `listArchive`. Its "Extract…" hands the entry back to the panel, which
+// swaps this dialog for its own ExtractDialog.
 import { useEffect, useState } from "react";
 import { Markdown, experimental_SourceCode as SourceCode } from "@get-bb/plugin-sdk/app";
 
@@ -31,8 +36,9 @@ import { dirname } from "../../lib/fm-paths";
 import { formatBytes } from "../../lib/format";
 import { useFmRpc, type RpcOutput } from "../../lib/fm-rpc";
 import { previewUrl } from "../../lib/preview";
-import { isUrlViewerKind, viewerKindFor } from "../../lib/viewer";
+import { isTextViewerKind, isUrlViewerKind, viewerKindForEntry } from "../../lib/viewer";
 import { usePreviewBase } from "../../hooks/usePreviewBase";
+import { ArchiveContents } from "../ArchiveContents";
 import { Button } from "../ui/button";
 import {
   Dialog,
@@ -54,6 +60,11 @@ export interface FileViewerDialogProps {
   onOpenChange: (open: boolean) => void;
   /** The file to show; always a real file inside the root (lib/viewer.ts). */
   entry: FileEntry;
+  /**
+   * An archive's "Extract…" (§8.13). The panel passes its own extraction
+   * flow; without it the archive is shown with no way to extract from here.
+   */
+  onExtract?: ((entry: FileEntry) => void) | undefined;
 }
 
 /** The middle of the dialog when there is nothing to render. */
@@ -90,10 +101,11 @@ function TextBody({
   );
 }
 
-export function FileViewerDialog({ open, onOpenChange, entry }: FileViewerDialogProps) {
+export function FileViewerDialog({ open, onOpenChange, entry, onExtract }: FileViewerDialogProps) {
   const rpc = useFmRpc();
-  const kind = viewerKindFor(entry.name);
+  const kind = viewerKindForEntry(entry);
   const wantsUrl = isUrlViewerKind(kind);
+  const wantsText = isTextViewerKind(kind);
 
   // One base URL per folder, exactly like the gallery's — and only for the
   // kinds that are shown from a URL, so opening a text file costs no mint.
@@ -112,7 +124,7 @@ export function FileViewerDialog({ open, onOpenChange, entry }: FileViewerDialog
   }, [entry.path]);
 
   useEffect(() => {
-    if (!open || wantsUrl) return;
+    if (!open || !wantsText) return;
     let cancelled = false;
     setText({ status: "loading" });
     void (async () => {
@@ -135,14 +147,21 @@ export function FileViewerDialog({ open, onOpenChange, entry }: FileViewerDialog
     return () => {
       cancelled = true;
     };
-  }, [entry.path, open, rpc, wantsUrl]);
+  }, [entry.path, open, rpc, wantsText]);
 
   const download = (): void => {
     downloadEntry(entry);
   };
 
   let body: React.ReactNode;
-  if (wantsUrl && mediaFailed) {
+  if (kind === "archive") {
+    body = (
+      <ArchiveContents
+        path={entry.path}
+        onExtract={onExtract === undefined ? undefined : () => onExtract(entry)}
+      />
+    );
+  } else if (wantsUrl && mediaFailed) {
     body = (
       <Placeholder>
         <p className="font-medium text-foreground">This file could not be displayed</p>
