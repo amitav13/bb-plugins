@@ -197,6 +197,14 @@ export function SheetDoc({
       setAttr(td, "data-dr-comment", hits.length > 0 ? "" : null);
       setAttr(td, "data-dr-active", active ? "" : null);
       setAttr(td, "data-dr-pin", pin ? String(pin.comment.seq) : null);
+      // The number lives in the tooltip; the corner mark stays small.
+      if (pin) {
+        setAttr(td, "title", `Comment ${pin.comment.seq}`);
+        setAttr(td, "data-dr-title", "");
+      } else if (td.hasAttribute("data-dr-title")) {
+        td.removeAttribute("title");
+        td.removeAttribute("data-dr-title");
+      }
     }
   }, []);
 

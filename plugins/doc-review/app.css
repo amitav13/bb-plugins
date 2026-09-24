@@ -41,19 +41,17 @@
 .doc-review-sheet td[data-dr-pin]:not(.ssv-s) {
   position: relative;
 }
+/* A corner triangle, as in Excel: it marks the cell without covering its value. */
 .doc-review-sheet td[data-dr-pin]::after {
-  content: attr(data-dr-pin);
+  content: "";
   position: absolute;
-  top: 1px;
-  right: 1px;
+  top: 0;
+  right: 0;
   z-index: 1;
-  min-width: 14px;
-  height: 14px;
-  padding: 0 3px;
-  border-radius: 7px;
-  background: var(--color-primary, var(--primary));
-  color: var(--color-primary-foreground, var(--primary-foreground));
-  font: 600 10px/14px system-ui, sans-serif;
-  text-align: center;
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: 0 9px 9px 0;
+  border-color: transparent var(--color-primary, var(--primary)) transparent transparent;
   pointer-events: none;
 }
